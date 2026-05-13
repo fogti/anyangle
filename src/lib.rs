@@ -11,3 +11,4 @@ pub use delaunay::{
 };
 pub use navmesh::{Navmesh, Remesh};
 pub use navmesher::Navmesher;
+pub use polygon_unionfind::PolygonWithData;

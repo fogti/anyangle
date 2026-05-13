@@ -72,8 +72,8 @@ where
         + Difference<PolygonWithData<K, D>>
         + Intersection<PolygonWithData<K, D>>,
 {
-    pub fn insert_polygon(&mut self, lamina_index: usize, polygon: PolygonWithData<K, D>) {
-        self.laminate.add_into_lamina(lamina_index, polygon);
+    pub fn insert_polygon(&mut self, layer: usize, polygon: PolygonWithData<K, D>) {
+        self.laminate.add_into_lamina(layer, polygon);
 
         let shapes_per_layer: Vec<Vec<Vec<Vec<[K; 2]>>>> = self
             .laminate

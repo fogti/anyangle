@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "demos/viewer"]
+resolver = "2"
+
 [package]
 name = "anyangle"
 version = "0.1.0"
