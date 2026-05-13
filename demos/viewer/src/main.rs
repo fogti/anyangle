@@ -151,23 +151,51 @@ fn row_panel_row_top(n_layers: usize, row_index: usize) -> f32 {
     y0 + row_index as f32 * (h + gap)
 }
 
-fn left_panel_bottom(n_layers: usize, n_rows: usize) -> f32 {
-    if n_rows == 0 {
+fn panel_bottom_after_parallel_rows(n_layers: usize, n_parallel_rows: usize) -> f32 {
+    if n_parallel_rows == 0 {
         if n_layers == 0 {
             94.0_f32
         } else {
             layer_row_top(n_layers - 1) + 34.0_f32 + 8.0_f32
         }
     } else {
-        row_panel_row_top(n_layers, n_rows - 1) + 34.0_f32 + 8.0_f32
+        row_panel_row_top(n_layers, n_parallel_rows - 1) + 34.0_f32 + 8.0_f32
     }
 }
 
-fn ui_blocks_click(mouse: Vec2, n_layers: usize, n_rows: usize) -> bool {
+fn interlaminas_section_y0(n_layers: usize, n_parallel_rows: usize) -> f32 {
+    panel_bottom_after_parallel_rows(n_layers, n_parallel_rows) + 22.0_f32
+}
+
+fn interlamina_row_top(
+    n_layers: usize,
+    n_parallel_rows: usize,
+    inter_index: usize,
+) -> f32 {
+    let y0 = interlaminas_section_y0(n_layers, n_parallel_rows);
+    let h = 34.0_f32;
+    let gap = 6.0_f32;
+    y0 + inter_index as f32 * (h + gap)
+}
+
+fn left_panel_bottom(n_layers: usize, n_parallel_rows: usize, n_inter: usize) -> f32 {
+    if n_inter == 0 {
+        panel_bottom_after_parallel_rows(n_layers, n_parallel_rows)
+    } else {
+        interlamina_row_top(n_layers, n_parallel_rows, n_inter - 1) + 34.0_f32 + 8.0_f32
+    }
+}
+
+fn ui_blocks_click(
+    mouse: Vec2,
+    n_layers: usize,
+    n_parallel_rows: usize,
+    n_inter: usize,
+) -> bool {
     if mouse.x >= 235.0 {
         return false;
     }
-    let bottom = left_panel_bottom(n_layers, n_rows);
+    let bottom = left_panel_bottom(n_layers, n_parallel_rows, n_inter);
     mouse.y >= 18.0 && mouse.y <= bottom
 }
 
@@ -202,6 +230,36 @@ fn row_radio_contains(mouse: Vec2, n_layers: usize, row_index: usize) -> bool {
     row_radio_center(n_layers, row_index).distance(mouse) <= 14.0
 }
 
+fn interlamina_panel_rect(
+    n_layers: usize,
+    n_parallel_rows: usize,
+    inter_index: usize,
+) -> Rect {
+    let h = 34.0_f32;
+    Rect::new(
+        12.0,
+        interlamina_row_top(n_layers, n_parallel_rows, inter_index),
+        220.0,
+        h,
+    )
+}
+
+fn interlamina_checkbox_square(
+    n_layers: usize,
+    n_parallel_rows: usize,
+    inter_index: usize,
+) -> Rect {
+    let pr = interlamina_panel_rect(n_layers, n_parallel_rows, inter_index);
+    Rect::new(pr.x + 12.0, pr.y + 9.0, 16.0, 16.0)
+}
+
+fn interlamina_accent(inter_index: usize, inter_count: usize) -> Color {
+    let hue_deg =
+        (inter_index as f32 / inter_count.max(1) as f32) * 110.0_f32 + 125.0_f32;
+    let (r, g, b) = hsv_to_rgb(hue_deg, 0.55, 1.0);
+    Color::new(r, g, b, 1.0)
+}
+
 #[macroquad::main("Navmesher layers")]
 async fn main() {
     let boundary = [[0_i32, 0], [420, 0], [380, 300], [200, 340], [40, 280]];
@@ -219,8 +277,10 @@ async fn main() {
 
     let n = navmesher.navmeshes()[0].layers().len();
     let num_parallel_rows = navmesher.navmeshes().len();
+    let num_interlaminas = n.saturating_sub(1);
 
     let mut layer_visible = vec![true; n];
+    let mut interlamina_visible = vec![true; num_interlaminas];
     let mut active_layer = 0_usize;
     let mut active_parallel_row = 0_usize;
 
@@ -281,7 +341,16 @@ async fn main() {
                     }
                 }
             }
-            if !consumed && !ui_blocks_click(mouse, n, num_parallel_rows) {
+            if !consumed {
+                for i in 0..num_interlaminas {
+                    if interlamina_panel_rect(n, num_parallel_rows, i).contains(mouse) {
+                        interlamina_visible[i] = !interlamina_visible[i];
+                        consumed = true;
+                        break;
+                    }
+                }
+            }
+            if !consumed && !ui_blocks_click(mouse, n, num_parallel_rows, num_interlaminas) {
                 let center = screen_to_world(mouse, origin, zoom);
                 let r_max = gen_range(28_i32, 96_i32);
                 let poly = random_convex_polygon(center, r_max, 9);
@@ -310,6 +379,28 @@ async fn main() {
                     for interior in polygon.interiors() {
                         draw_closed_polyline_i32(interior, origin, zoom, line_w, stroke);
                     }
+                }
+            }
+        }
+
+        for (inter_i, visible) in interlamina_visible.iter().enumerate() {
+            if !*visible {
+                continue;
+            }
+            let accent = interlamina_accent(inter_i, num_interlaminas.max(1));
+            let stroke = Color::new(
+                accent.r * 0.92,
+                accent.g * 0.92,
+                accent.b * 0.92,
+                0.92,
+            );
+            let line_w = 4.25_f32;
+            let inter = &navmesher.laminate().interlaminas()[inter_i];
+            let polygon_set = inter.primary();
+            for polygon in polygon_set.polygons().values() {
+                draw_closed_polyline_i32(polygon.exterior(), origin, zoom, line_w, stroke);
+                for interior in polygon.interiors() {
+                    draw_closed_polyline_i32(interior, origin, zoom, line_w * 0.72, stroke);
                 }
             }
         }
@@ -408,6 +499,38 @@ async fn main() {
             draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, LIGHTGRAY);
             let label = format!("row {} (core / peripheral)", r);
             draw_text(&label, rect.x + 44.0, rect.y + 23.0, 18.0, WHITE);
+        }
+
+        if num_interlaminas > 0 {
+            draw_text(
+                "interlaminas (between laminas)",
+                12.0,
+                interlaminas_section_y0(n, num_parallel_rows) - 20.0,
+                18.0,
+                GRAY,
+            );
+
+            for i in 0..num_interlaminas {
+                let pr = interlamina_panel_rect(n, num_parallel_rows, i);
+                let accent = interlamina_accent(i, num_interlaminas);
+                let on = interlamina_visible[i];
+                let bg = if on {
+                    Color::new(accent.r * 0.22, accent.g * 0.28, accent.b * 0.32, 0.92)
+                } else {
+                    Color::new(0.12, 0.12, 0.12, 0.92)
+                };
+                draw_rectangle(pr.x, pr.y, pr.w, pr.h, bg);
+                draw_rectangle_lines(pr.x, pr.y, pr.w, pr.h, 2.0, LIGHTGRAY);
+
+                let sq = interlamina_checkbox_square(n, num_parallel_rows, i);
+                draw_rectangle_lines(sq.x, sq.y, sq.w, sq.h, 2.0, LIGHTGRAY);
+                if on {
+                    draw_rectangle(sq.x + 3.5, sq.y + 3.5, sq.w - 7.0, sq.h - 7.0, accent);
+                }
+
+                let label = format!("between {} and {} (interlamina {})", i, i + 1, i);
+                draw_text(&label, pr.x + 36.0, pr.y + 23.0, 18.0, WHITE);
+            }
         }
 
         next_frame().await;
