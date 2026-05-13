@@ -154,8 +154,12 @@ async fn main() {
     let num_layers = 4_usize;
     let parallel_inflations = [12_i32, 28];
 
-    let mut navmesher =
-        Navmesher::<i32, DelaunayNavmesh<i32>, ()>::new(boundary, num_layers, parallel_inflations);
+    let mut navmesher = Navmesher::<i32, DelaunayNavmesh<i32>, ()>::new(
+        boundary,
+        num_layers,
+        parallel_inflations,
+        core::iter::empty(),
+    );
 
     let mut layer_visible = vec![true; navmesher.navmesh().layers().len()];
     let mut active_layer = 0_usize;

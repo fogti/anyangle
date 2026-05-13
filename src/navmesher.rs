@@ -13,57 +13,20 @@ use crate::navmesh::Remesh;
 
 pub struct Navmesher<K: RTreeNum, N, D> {
     laminate: Laminate<K, PolygonWithData<K, D>>,
-    navmesh: N,
+    navmeshes: Vec<Vec<N>>,
     scalar_marker: PhantomData<K>,
 }
 
 impl<K: RTreeNum, N, D> Navmesher<K, N, D> {
     pub fn navmesh(&self) -> &N {
-        &self.navmesh
-    }
-}
-
-impl<K, N, D> Navmesher<K, N, D>
-where
-    K: RTreeNum + Default + Clone,
-    N: Default + Remesh<K>,
-    D: Clone + Default,
-    PolygonWithData<K, D>: Union<PolygonWithData<K, D>> + Difference<PolygonWithData<K, D>>,
-{
-    pub fn new(
-        boundary: impl IntoIterator<Item = [K; 2]>,
-        num_layers: usize,
-        parallel_inflations: impl IntoIterator<Item = K>,
-    ) -> Self {
-        let boundary = PolygonWithData {
-            exterior: boundary.into_iter().collect(),
-            interiors: Vec::new(),
-            data: D::default(),
-        };
-
-        let exterior = boundary.exterior.clone();
-        let laminate =
-            Laminate::<K, PolygonWithData<K, D>>::new(boundary, num_layers, parallel_inflations);
-
-        let shapes_per_layer: Vec<Vec<Vec<Vec<[K; 2]>>>> = (0..num_layers)
-            .map(|_| vec![vec![exterior.clone()]])
-            .collect();
-
-        let mut navmesh = N::default();
-        navmesh.remesh(&shapes_per_layer);
-
-        Self {
-            laminate,
-            navmesh,
-            scalar_marker: PhantomData,
-        }
+        &self.navmeshes[0][0]
     }
 }
 
 impl<K, N, D> Navmesher<K, N, D>
 where
     K: RTreeNum + Default + Clone + Ord,
-    N: Remesh<K>,
+    N: Default + Remesh<K>,
     D: Clone + Default,
     PolygonWithData<K, D>: Clone
         + Rings<K>
@@ -72,29 +35,85 @@ where
         + Difference<PolygonWithData<K, D>>
         + Intersection<PolygonWithData<K, D>>,
 {
+    pub fn new(
+        boundary: impl IntoIterator<Item = [K; 2]>,
+        num_layers: usize,
+        parallel_inflations: impl IntoIterator<Item = K>,
+        rail_offsets: impl IntoIterator<Item = K>,
+    ) -> Self {
+        let parallel_inflations: Vec<K> = parallel_inflations.into_iter().collect();
+        let rail_offsets: Vec<K> = rail_offsets.into_iter().collect();
+        let row_count = parallel_inflations.len() + 1;
+        let subrow_count = rail_offsets.len() + 1;
+
+        let boundary = PolygonWithData {
+            exterior: boundary.into_iter().collect(),
+            interiors: Vec::new(),
+            data: D::default(),
+        };
+
+        let laminate = Laminate::<K, PolygonWithData<K, D>>::new(
+            boundary,
+            num_layers,
+            parallel_inflations,
+            rail_offsets,
+        );
+
+        let mut navmeshes = vec![];
+
+        for row in 0..row_count {
+            let mut inner_navmeshes = vec![];
+
+            for subrow in 0..subrow_count {
+                let mut navmesh = N::default();
+                navmesh.remesh(&Self::shapes_per_layer(&laminate, row, subrow));
+                inner_navmeshes.push(navmesh);
+            }
+
+            navmeshes.push(inner_navmeshes);
+        }
+
+        Self {
+            laminate,
+            navmeshes,
+            scalar_marker: PhantomData,
+        }
+    }
+
     pub fn insert_polygon(&mut self, layer: usize, polygon: PolygonWithData<K, D>) {
         self.laminate.add_into_lamina(layer, polygon);
 
-        let shapes_per_layer: Vec<Vec<Vec<Vec<[K; 2]>>>> = self
-            .laminate
-            .laminas()
-            .iter()
-            .map(|lamina| {
-                let polygon_set = lamina.primary().primary().minuend();
-                polygon_set
-                    .polygons()
-                    .values()
-                    .map(|polygon| {
-                        let mut contours = vec![polygon.exterior().to_vec()];
-                        for interior in polygon.interiors() {
-                            contours.push(interior.to_vec());
-                        }
-                        contours
-                    })
-                    .collect()
-            })
-            .collect();
+        for (row, row_navmeshes) in self.navmeshes.iter_mut().enumerate() {
+            for (subrow, navmesh) in row_navmeshes.iter_mut().enumerate() {
+                navmesh.remesh(&Self::shapes_per_layer(&self.laminate, row, subrow));
+            }
+        }
+    }
 
-        self.navmesh.remesh(&shapes_per_layer);
+    fn shapes_per_layer(
+        laminate: &Laminate<K, PolygonWithData<K, D>>,
+        row: usize,
+        subrow: usize,
+    ) -> Vec<Vec<Vec<Vec<[K; 2]>>>> {
+        let mut shapes_per_layer = Vec::new();
+
+        for lamina in laminate.laminas().iter() {
+            let polygon_set = lamina.row(row).row(subrow).minuend();
+            let mut shape = vec![];
+
+            for polygon in polygon_set.polygons().values() {
+                let mut contours = vec![polygon.exterior().to_vec()];
+
+                for interior in polygon.interiors() {
+                    contours.push(interior.to_vec());
+                }
+
+                shape.push(contours);
+            }
+
+            shapes_per_layer.push(shape);
+        }
+
+        shapes_per_layer
     }
 }
