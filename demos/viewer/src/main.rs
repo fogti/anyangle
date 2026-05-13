@@ -5,7 +5,7 @@
 // Programming of this file was entirely done by prompting Cursor Composer 2.0
 // Fast.
 
-use anyangle::{DelaunayNavmesh, Navmesher, PolygonWithData};
+use anyangle::{DelaunayNavmesh, Navmesher, PolygonWithData, Rings};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 
@@ -33,6 +33,24 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
 
 fn world_to_screen(p: [i32; 2], origin: Vec2, zoom: f32) -> Vec2 {
     vec2(origin.x + p[0] as f32 * zoom, origin.y - p[1] as f32 * zoom)
+}
+
+fn draw_closed_polyline_i32(
+    points: &[[i32; 2]],
+    origin: Vec2,
+    zoom: f32,
+    thickness: f32,
+    color: Color,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    let n = points.len();
+    for i in 0..n {
+        let a = world_to_screen(points[i], origin, zoom);
+        let b = world_to_screen(points[(i + 1) % n], origin, zoom);
+        draw_line(a.x, a.y, b.x, b.y, thickness, color);
+    }
 }
 
 fn screen_to_world(screen: Vec2, origin: Vec2, zoom: f32) -> [i32; 2] {
@@ -190,6 +208,7 @@ async fn main() {
     let num_layers = 4_usize;
     let parallel_inflations = [20_i32];
     let rail_offsets = [5_i32];
+    let subrow_count = rail_offsets.len() + 1;
 
     let mut navmesher = Navmesher::<i32, DelaunayNavmesh<i32>, ()>::new(
         boundary,
@@ -198,9 +217,8 @@ async fn main() {
         rail_offsets,
     );
 
-    let nav_rows = navmesher.navmeshes();
-    let n = nav_rows[0][0].layers().len();
-    let num_parallel_rows = nav_rows.len();
+    let n = navmesher.navmeshes()[0].layers().len();
+    let num_parallel_rows = navmesher.navmeshes().len();
 
     let mut layer_visible = vec![true; n];
     let mut active_layer = 0_usize;
@@ -273,45 +291,49 @@ async fn main() {
 
         clear_background(BLACK);
 
-        let nav_rows = navmesher.navmeshes();
-        let subrows = &nav_rows[active_parallel_row];
+        let mesh = &navmesher.navmeshes()[active_parallel_row];
 
-        for (subrow, mesh) in subrows.iter().enumerate() {
-            let is_primary = subrow == 0;
-
-            for (layer_i, layer) in mesh.layers().iter().enumerate().rev() {
+        for subrow in 1..subrow_count {
+            for (layer_i, lamina) in navmesher.laminate().laminas().iter().enumerate().rev() {
                 if !layer_visible[layer_i] {
                     continue;
                 }
 
                 let fill = layer_color(layer_i, n);
-                let mut fill_a = fill;
-                let active = layer_i == active_layer;
-                fill_a.a = if active { 0.20 } else { 0.12 };
-
                 let stroke = Color::new(fill.r * 0.6, fill.g * 0.6, fill.b * 0.6, 0.85);
-                let line_w = if is_primary {
-                    if active {
-                        2.35
-                    } else {
-                        1.2
-                    }
-                } else if active {
-                    1.35
-                } else {
-                    0.65
-                };
+                let active = layer_i == active_layer;
+                let line_w = if active { 1.35 } else { 0.65 };
 
-                let tri = layer.triangulation();
-                for verts in tri.vertices() {
-                    let a = world_to_screen(verts[0], origin, zoom);
-                    let b = world_to_screen(verts[1], origin, zoom);
-                    let c = world_to_screen(verts[2], origin, zoom);
-                    if is_primary {
-                        draw_triangle(a, b, c, fill_a);
+                let polygon_set = lamina.row(active_parallel_row).row(subrow).minuend();
+                for polygon in polygon_set.polygons().values() {
+                    draw_closed_polyline_i32(polygon.exterior(), origin, zoom, line_w, stroke);
+                    for interior in polygon.interiors() {
+                        draw_closed_polyline_i32(interior, origin, zoom, line_w, stroke);
                     }
-                    draw_triangle_lines(a, b, c, line_w, stroke);
                 }
+            }
+        }
+
+        for (layer_i, layer) in mesh.layers().iter().enumerate().rev() {
+            if !layer_visible[layer_i] {
+                continue;
+            }
+
+            let fill = layer_color(layer_i, n);
+            let mut fill_a = fill;
+            let active = layer_i == active_layer;
+            fill_a.a = if active { 0.20 } else { 0.12 };
+
+            let stroke = Color::new(fill.r * 0.6, fill.g * 0.6, fill.b * 0.6, 0.85);
+            let line_w = if active { 2.35 } else { 1.2 };
+
+            let tri = layer.triangulation();
+            for verts in tri.vertices() {
+                let a = world_to_screen(verts[0], origin, zoom);
+                let b = world_to_screen(verts[1], origin, zoom);
+                let c = world_to_screen(verts[2], origin, zoom);
+                draw_triangle(a, b, c, fill_a);
+                draw_triangle_lines(a, b, c, line_w, stroke);
             }
         }
 

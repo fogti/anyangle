@@ -13,13 +13,17 @@ use crate::navmesh::Remesh;
 
 pub struct Navmesher<K: RTreeNum, N, D> {
     laminate: Laminate<K, PolygonWithData<K, D>>,
-    navmeshes: Vec<Vec<N>>,
+    navmeshes: Vec<N>,
     scalar_marker: PhantomData<K>,
 }
 
 impl<K: RTreeNum, N, D> Navmesher<K, N, D> {
-    pub fn navmeshes(&self) -> &[Vec<N>] {
+    pub fn navmeshes(&self) -> &[N] {
         &self.navmeshes
+    }
+
+    pub fn laminate(&self) -> &Laminate<K, PolygonWithData<K, D>> {
+        &self.laminate
     }
 }
 
@@ -44,7 +48,6 @@ where
         let parallel_inflations: Vec<K> = parallel_inflations.into_iter().collect();
         let rail_offsets: Vec<K> = rail_offsets.into_iter().collect();
         let row_count = parallel_inflations.len() + 1;
-        let subrow_count = rail_offsets.len() + 1;
 
         let boundary = PolygonWithData {
             exterior: boundary.into_iter().collect(),
@@ -62,15 +65,9 @@ where
         let mut navmeshes = vec![];
 
         for row in 0..row_count {
-            let mut inner_navmeshes = vec![];
-
-            for subrow in 0..subrow_count {
-                let mut navmesh = N::default();
-                navmesh.remesh(&Self::shapes_per_layer(&laminate, row, subrow));
-                inner_navmeshes.push(navmesh);
-            }
-
-            navmeshes.push(inner_navmeshes);
+            let mut navmesh = N::default();
+            navmesh.remesh(&Self::shapes_per_layer(&laminate, row, 0));
+            navmeshes.push(navmesh);
         }
 
         Self {
@@ -83,10 +80,8 @@ where
     pub fn insert_polygon(&mut self, layer: usize, polygon: PolygonWithData<K, D>) {
         self.laminate.add_into_lamina(layer, polygon);
 
-        for (row, row_navmeshes) in self.navmeshes.iter_mut().enumerate() {
-            for (subrow, navmesh) in row_navmeshes.iter_mut().enumerate() {
-                navmesh.remesh(&Self::shapes_per_layer(&self.laminate, row, subrow));
-            }
+        for (row, navmesh) in self.navmeshes.iter_mut().enumerate() {
+            navmesh.remesh(&Self::shapes_per_layer(&self.laminate, row, 0));
         }
     }
 
