@@ -18,8 +18,8 @@ pub struct Navmesher<K: RTreeNum, N, D> {
 }
 
 impl<K: RTreeNum, N, D> Navmesher<K, N, D> {
-    pub fn navmesh(&self) -> &N {
-        &self.navmeshes[0][0]
+    pub fn navmeshes(&self) -> &[Vec<N>] {
+        &self.navmeshes
     }
 }
 

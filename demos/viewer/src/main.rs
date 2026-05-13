@@ -118,15 +118,38 @@ fn layer_row_top(layer_index: usize) -> f32 {
     y0 + layer_index as f32 * (h + gap)
 }
 
-fn ui_blocks_click(mouse: Vec2, n: usize) -> bool {
+fn rows_section_y0(n_layers: usize) -> f32 {
+    if n_layers == 0 {
+        96.0_f32
+    } else {
+        layer_row_top(n_layers - 1) + 34.0_f32 + 30.0_f32
+    }
+}
+
+fn row_panel_row_top(n_layers: usize, row_index: usize) -> f32 {
+    let y0 = rows_section_y0(n_layers);
+    let h = 34.0_f32;
+    let gap = 6.0_f32;
+    y0 + row_index as f32 * (h + gap)
+}
+
+fn left_panel_bottom(n_layers: usize, n_rows: usize) -> f32 {
+    if n_rows == 0 {
+        if n_layers == 0 {
+            94.0_f32
+        } else {
+            layer_row_top(n_layers - 1) + 34.0_f32 + 8.0_f32
+        }
+    } else {
+        row_panel_row_top(n_layers, n_rows - 1) + 34.0_f32 + 8.0_f32
+    }
+}
+
+fn ui_blocks_click(mouse: Vec2, n_layers: usize, n_rows: usize) -> bool {
     if mouse.x >= 235.0 {
         return false;
     }
-    let bottom = if n == 0 {
-        94.0_f32
-    } else {
-        layer_row_top(n - 1) + 34.0 + 8.0
-    };
+    let bottom = left_panel_bottom(n_layers, n_rows);
     mouse.y >= 18.0 && mouse.y <= bottom
 }
 
@@ -148,21 +171,40 @@ fn layer_radio_contains(mouse: Vec2, layer_index: usize) -> bool {
     layer_radio_center(layer_index).distance(mouse) <= 14.0
 }
 
+fn row_panel_rect(n_layers: usize, row_index: usize) -> Rect {
+    let h = 34.0_f32;
+    Rect::new(12.0, row_panel_row_top(n_layers, row_index), 220.0, h)
+}
+
+fn row_radio_center(n_layers: usize, row_index: usize) -> Vec2 {
+    vec2(26.0, row_panel_row_top(n_layers, row_index) + 17.0)
+}
+
+fn row_radio_contains(mouse: Vec2, n_layers: usize, row_index: usize) -> bool {
+    row_radio_center(n_layers, row_index).distance(mouse) <= 14.0
+}
+
 #[macroquad::main("Navmesher layers")]
 async fn main() {
     let boundary = [[0_i32, 0], [420, 0], [380, 300], [200, 340], [40, 280]];
     let num_layers = 4_usize;
-    let parallel_inflations = [12_i32, 28];
+    let parallel_inflations = [20_i32];
+    let rail_offsets = [5_i32];
 
     let mut navmesher = Navmesher::<i32, DelaunayNavmesh<i32>, ()>::new(
         boundary,
         num_layers,
         parallel_inflations,
-        core::iter::empty(),
+        rail_offsets,
     );
 
-    let mut layer_visible = vec![true; navmesher.navmesh().layers().len()];
+    let nav_rows = navmesher.navmeshes();
+    let n = nav_rows[0][0].layers().len();
+    let num_parallel_rows = nav_rows.len();
+
+    let mut layer_visible = vec![true; n];
     let mut active_layer = 0_usize;
+    let mut active_parallel_row = 0_usize;
 
     let mut zoom = 1.8_f32;
     let mut origin = vec2(
@@ -194,8 +236,6 @@ async fn main() {
             last_mouse = None;
         }
 
-        let n = navmesher.navmesh().layers().len();
-
         if is_mouse_button_pressed(MouseButton::Left) {
             let mut consumed = false;
             for i in 0..n {
@@ -214,7 +254,16 @@ async fn main() {
                     }
                 }
             }
-            if !consumed && !ui_blocks_click(mouse, n) {
+            if !consumed {
+                for r in 0..num_parallel_rows {
+                    if row_radio_contains(mouse, n, r) {
+                        active_parallel_row = r;
+                        consumed = true;
+                        break;
+                    }
+                }
+            }
+            if !consumed && !ui_blocks_click(mouse, n, num_parallel_rows) {
                 let center = screen_to_world(mouse, origin, zoom);
                 let r_max = gen_range(28_i32, 96_i32);
                 let poly = random_convex_polygon(center, r_max, 9);
@@ -224,28 +273,45 @@ async fn main() {
 
         clear_background(BLACK);
 
-        let mesh = navmesher.navmesh();
+        let nav_rows = navmesher.navmeshes();
+        let subrows = &nav_rows[active_parallel_row];
 
-        for (layer_i, layer) in mesh.layers().iter().enumerate().rev() {
-            if !layer_visible[layer_i] {
-                continue;
-            }
+        for (subrow, mesh) in subrows.iter().enumerate() {
+            let is_primary = subrow == 0;
 
-            let fill = layer_color(layer_i, n);
-            let mut fill_a = fill;
-            let active = layer_i == active_layer;
-            fill_a.a = if active { 0.20 } else { 0.12 };
+            for (layer_i, layer) in mesh.layers().iter().enumerate().rev() {
+                if !layer_visible[layer_i] {
+                    continue;
+                }
 
-            let stroke = Color::new(fill.r * 0.6, fill.g * 0.6, fill.b * 0.6, 0.85);
-            let line_w = if active { 2.35 } else { 1.2 };
+                let fill = layer_color(layer_i, n);
+                let mut fill_a = fill;
+                let active = layer_i == active_layer;
+                fill_a.a = if active { 0.20 } else { 0.12 };
 
-            let tri = layer.triangulation();
-            for verts in tri.vertices() {
-                let a = world_to_screen(verts[0], origin, zoom);
-                let b = world_to_screen(verts[1], origin, zoom);
-                let c = world_to_screen(verts[2], origin, zoom);
-                draw_triangle(a, b, c, fill_a);
-                draw_triangle_lines(a, b, c, line_w, stroke);
+                let stroke = Color::new(fill.r * 0.6, fill.g * 0.6, fill.b * 0.6, 0.85);
+                let line_w = if is_primary {
+                    if active {
+                        2.35
+                    } else {
+                        1.2
+                    }
+                } else if active {
+                    1.35
+                } else {
+                    0.65
+                };
+
+                let tri = layer.triangulation();
+                for verts in tri.vertices() {
+                    let a = world_to_screen(verts[0], origin, zoom);
+                    let b = world_to_screen(verts[1], origin, zoom);
+                    let c = world_to_screen(verts[2], origin, zoom);
+                    if is_primary {
+                        draw_triangle(a, b, c, fill_a);
+                    }
+                    draw_triangle_lines(a, b, c, line_w, stroke);
+                }
             }
         }
 
@@ -257,7 +323,7 @@ async fn main() {
             LIGHTGRAY,
         );
         draw_text(
-            &format!("active layer: {}", active_layer),
+            &format!("active lamina layer: {}", active_layer),
             12.0,
             46.0,
             20.0,
@@ -293,6 +359,33 @@ async fn main() {
                 format!("layer {} hidden", i)
             };
             draw_text(&label, r.x + 44.0, r.y + 23.0, 18.0, WHITE);
+        }
+
+        draw_text(
+            "parallel row (navmesh slice)",
+            12.0,
+            rows_section_y0(n) - 20.0,
+            18.0,
+            GRAY,
+        );
+
+        for r in 0..num_parallel_rows {
+            let rect = row_panel_rect(n, r);
+            let accent = Color::new(0.45, 0.85, 0.95, 1.0);
+            let bg = if active_parallel_row == r {
+                Color::new(accent.r * 0.25, accent.g * 0.35, accent.b * 0.4, 0.92)
+            } else {
+                Color::new(0.12, 0.12, 0.12, 0.92)
+            };
+            draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+            let c = row_radio_center(n, r);
+            draw_circle_lines(c.x, c.y, 11.0, 2.0, LIGHTGRAY);
+            if active_parallel_row == r {
+                draw_circle(c.x, c.y, 6.5, accent);
+            }
+            draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, LIGHTGRAY);
+            let label = format!("row {} (core / peripheral)", r);
+            draw_text(&label, rect.x + 44.0, rect.y + 23.0, 18.0, WHITE);
         }
 
         next_frame().await;
