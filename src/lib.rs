@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-mod triangle;
+mod delaunay;
+mod navmesh;
+mod navmesher;
 
-pub mod chain;
-pub mod monotonizer;
-pub mod point;
-
-pub use chain::{ChainVertex, ChainVertexType, ChainVertexWithIndex, VertexIndex};
-pub use monotonizer::{Diagonal, Monotonizer};
-pub use point::Point;
+pub use delaunay::{
+    DelaunayNavmesh, DelaunayNavmeshLayer, DelaunayTriangleId, DelaunayTriangulation,
+};
+pub use navmesh::{Navmesh, Remesh};
+pub use navmesher::Navmesher;
