@@ -47,15 +47,15 @@ impl<PT> PolygonalComplex<PT> {
         let ptneighs = &self.points.get(anchor)?.1;
         let mut it = ptneighs.iter();
         it.position(|i| i == &neigh)?;
-        it.next().map(|j| OpenTriangle(neigh, anchor, *j))
+        it.next().map(|j| OpenTriangle(*j, anchor, neigh))
     }
 
     /// Resolve `ot` to a position in the neighbor vector of the point `ot.1`.
     pub fn resolve_open_triangle(&self, ot: &OpenTriangle) -> Option<usize> {
         let ptneighs = &self.points.get(ot.1)?.1;
-        let pos0 = ptneighs.iter().position(|i| i == &ot.0)?;
-        if ptneighs[(pos0 + 1) % ptneighs.len()] == ot.2 {
-            Some(pos0)
+        let pos2 = ptneighs.iter().position(|i| i == &ot.2)?;
+        if ptneighs[(pos2 + 1) % ptneighs.len()] == ot.0 {
+            Some(pos2)
         } else {
             None
         }
@@ -204,8 +204,8 @@ mod tests {
         assert_eq!(pgc.points(), &{
             let mut expected = StableVec::new();
             let inp: &[&[usize]] = &[
-                &[4, 2, 3],
-                &[5, 3, 2],
+                &[2, 4, 3],
+                &[3, 5, 2],
                 &[0, 1],
                 &[0, 1],
                 &[0, 6, 7],
@@ -246,12 +246,12 @@ mod tests {
         assert_eq!(pgc.points(), &{
             let mut expected = StableVec::new();
             let inp: &[&[usize]] = &[
-                &[5, 2, 4],
-                &[4, 3, 5],
+                &[2, 5, 4],
+                &[3, 4, 5],
                 &[0, 5],
                 &[4, 1],
-                &[1, 0, 3],
-                &[0, 1, 2],
+                &[0, 1, 3],
+                &[1, 0, 2],
             ];
             for i in inp {
                 expected.push(((), i.to_vec().into_boxed_slice()));
