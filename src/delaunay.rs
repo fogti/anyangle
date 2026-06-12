@@ -185,7 +185,7 @@ macro_rules! impl_remesh_int {
                 let boundary_id = DelaunayTriangleId::new(usize::MAX, usize::MAX);
 
                 for (layer_index, shapes) in shapes_per_layer.iter().enumerate() {
-                    let int_shapes: IntShapes = shapes
+                    let int_shapes: IntShapes<_> = shapes
                         .iter()
                         .map(|shape| {
                             shape
