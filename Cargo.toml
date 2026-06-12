@@ -12,3 +12,4 @@ i_triangle = { git = "https://github.com/iShape-Rust/iTriangle" }
 num-traits = "0.2"
 polygon_unionfind = { version = "0.7", features = ["undoredo"] }
 rstar = "0.12"
+stable-vec = "0.4"
