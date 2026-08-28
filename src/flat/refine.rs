@@ -19,6 +19,7 @@ use i_triangle::i_overlay::{
     string::clip::{ClipRule, IntClip},
 };
 use i_triangle::int::triangulatable::IntTriangulatable as _;
+use maplike::ops as mlops;
 use rstar::{AABB, RTree, RTreeNum, RTreeObject, RTreeParams};
 use std::{collections::BTreeMap, ops::ControlFlow};
 
@@ -105,14 +106,9 @@ where
 impl<Scalar, T, Params> Tesselation<Scalar, T, Params>
 where
     Scalar: OverlayInt + IntNumber + RTreeNum,
-    T: Clone + Eq + Ord,
+    T: Clone,
     Params: RTreeParams,
 {
-    #[inline]
-    pub fn rtree(&self) -> &RTree<Face<Scalar, T>, Params> {
-        &self.rtree
-    }
-
     fn insert_impl<II: IntoIterator<Item = (Vec<Vec<Vec<IntPoint<Scalar>>>>, T)>>(
         &mut self,
         iter: II,
@@ -196,7 +192,10 @@ where
 
     /// In the given envelope `envelope`, find all faces with the same data and re-segment them
     /// into convex faces.
-    pub fn optimize_envelope(&mut self, envelope: AABB<[Scalar; 2]>) {
+    pub fn optimize_envelope(&mut self, envelope: AABB<[Scalar; 2]>)
+    where
+        T: Eq + Ord,
+    {
         let mut buckets = BTreeMap::<T, Vec<Box<[[Scalar; 2]]>>>::new();
         for Face { contour, data } in self.rtree.drain_in_envelope_intersecting(envelope) {
             buckets.entry(data).or_default().push(contour);
@@ -213,7 +212,13 @@ where
             )
         }));
     }
+}
 
+impl<Scalar, T, Params> Tesselation<Scalar, T, Params>
+where
+    Scalar: RTreeNum,
+    Params: RTreeParams,
+{
     pub fn rebalance(&mut self) {
         self.rtree =
             RTree::bulk_load_with_params(core::mem::take(&mut self.rtree).into_iter().collect());
@@ -221,6 +226,7 @@ where
 
     pub fn update_data<B, F>(&mut self, outer_contour: &[IntPoint<Scalar>], f: F) -> ControlFlow<B>
     where
+        Scalar: IntNumber + OverlayInt,
         F: Fn(&[[Scalar; 2]], &mut T) -> ControlFlow<B>,
     {
         self.rtree.locate_in_envelope_intersecting_int_mut(
@@ -246,11 +252,7 @@ where
         )
     }
 
-    pub fn map_data<U, F>(self, mut f: F) -> Tesselation<Scalar, U, Params>
-    where
-        U: Clone + Eq + Ord,
-        F: FnMut(T) -> U,
-    {
+    pub fn map_data<U, F: FnMut(T) -> U>(self, mut f: F) -> Tesselation<Scalar, U, Params> {
         Tesselation {
             rtree: RTree::bulk_load_with_params(
                 self.rtree
@@ -348,13 +350,86 @@ where
     T: GetLayerIds,
     Params: RTreeParams,
 {
+    #[inline]
     fn face_layers(&self, face: <Self as Topo2DComplex>::FaceId) -> LayerIds {
+        use mlops::Get;
+        self.get(face).unwrap().layers()
+    }
+}
+
+impl<Scalar, T, Params> AsRef<RTree<Face<Scalar, T>, Params>> for Tesselation<Scalar, T, Params>
+where
+    Scalar: RTreeNum,
+    Params: RTreeParams,
+{
+    #[inline(always)]
+    fn as_ref(&self) -> &RTree<Face<Scalar, T>, Params> {
+        &self.rtree
+    }
+}
+
+impl<Scalar, T, Params> maplike::containers::Container for Tesselation<Scalar, T, Params>
+where
+    Scalar: RTreeNum,
+    Params: RTreeParams,
+{
+    type Key = Box<[[Scalar; 2]]>;
+    type Value = T;
+}
+
+impl<Scalar, T, Params> mlops::WithOne<Face<Scalar, T>> for Tesselation<Scalar, T, Params>
+where
+    Scalar: IntNumber + OverlayInt + RTreeNum,
+    T: Clone + Default,
+    Params: RTreeParams,
+{
+    fn with_one(element: Face<Scalar, T>) -> Self {
+        let mut this = Self::default();
+
+        let contour: Vec<_> = element.contour.into_iter().map(Into::into).collect();
+        this.allocate_shapes(vec![vec![contour]]);
+
+        for i in &mut this.rtree {
+            i.data = element.data.clone();
+        }
+
+        this
+    }
+}
+
+impl<Scalar, T, Params> mlops::Get<Box<[[Scalar; 2]]>, [[Scalar; 2]]>
+    for Tesselation<Scalar, T, Params>
+where
+    Scalar: RTreeNum,
+    Params: RTreeParams,
+{
+    fn get(&self, face: &[[Scalar; 2]]) -> Option<&T> {
         self.rtree
             .locate_in_envelope(AABB::from_points(face.iter()))
             .find(move |&i| &i.contour[..] == face)
-            .unwrap()
-            .data
-            .layers()
+            .map(|i| &i.data)
+    }
+}
+
+impl<Scalar, T, Params> mlops::Clear for Tesselation<Scalar, T, Params>
+where
+    Scalar: RTreeNum,
+    Params: RTreeParams,
+{
+    #[inline]
+    fn clear(&mut self) {
+        self.rtree = RTree::new_with_params();
+    }
+}
+
+impl<Scalar, T, Params> mlops::Len for Tesselation<Scalar, T, Params>
+where
+    Scalar: RTreeNum,
+    Params: RTreeParams,
+{
+    #[inline]
+    fn len(&self) -> usize {
+        self.rtree.size()
     }
 }
 
@@ -387,7 +462,7 @@ mod tests {
             },
         );
 
-        assert!(tess.rtree().contains(&Face {
+        assert!(tess.as_ref().contains(&Face {
             contour: vec![[2i32, 2], [1, 2], [1, 1], [2, 1]].into_boxed_slice(),
             data: {
                 let mut layers = LayerIds::default();
