@@ -25,47 +25,48 @@ use std::{collections::BTreeMap, ops::ControlFlow};
 use crate::flat::{GetLayerIds, LayerIds, MultiLayerNavmesh, Topo2DComplex};
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Face<Scalar: IntNumber, T> {
-    pub contour: Vec<IntPoint<Scalar>>,
+pub struct Face<Scalar, T> {
+    pub contour: Box<[[Scalar; 2]]>,
     pub data: T,
 }
 
-impl<Scalar, T> fmt::Debug for Face<Scalar, T>
-where
-    Scalar: IntNumber + fmt::Debug,
-    T: fmt::Debug,
-{
+impl<Scalar, T> Face<Scalar, T> {
+    pub fn contour_intpoints(&self) -> Vec<IntPoint<Scalar>>
+    where
+        Scalar: IntNumber,
+    {
+        self.contour[..]
+            .iter()
+            .map(|i| IntPoint { x: i[0], y: i[1] })
+            .collect()
+    }
+}
+
+impl<Scalar: fmt::Debug, T: fmt::Debug> fmt::Debug for Face<Scalar, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Face")
-            .field("contour", &format_args!("{:?}", self.contour))
+            .field("contour", &format_args!("{:?}", &self.contour[..]))
             .field("data", &self.data)
             .finish()
     }
 }
 
-impl<Scalar: IntNumber + RTreeNum, T> RTreeObject for Face<Scalar, T> {
+impl<Scalar: RTreeNum, T> RTreeObject for Face<Scalar, T> {
     type Envelope = AABB<[Scalar; 2]>;
 
     fn envelope(&self) -> Self::Envelope {
-        AABB::from_points(
-            self.contour
-                .iter()
-                .map(|i| [i.x, i.y])
-                .collect::<Vec<_>>()
-                .iter(),
-        )
+        AABB::from_points(self.contour.iter())
     }
 }
 
 #[derive(Clone)]
-pub struct Tesselation<Scalar: IntNumber + RTreeNum, T, Params: RTreeParams = rstar::DefaultParams>
-{
+pub struct Tesselation<Scalar: RTreeNum, T, Params: RTreeParams = rstar::DefaultParams> {
     rtree: RTree<Face<Scalar, T>, Params>,
 }
 
 impl<Scalar, T, Params> fmt::Debug for Tesselation<Scalar, T, Params>
 where
-    Scalar: IntNumber + RTreeNum,
+    Scalar: RTreeNum,
     T: fmt::Debug,
     Params: RTreeParams,
 {
@@ -77,7 +78,7 @@ where
 
 impl<Scalar, T, Params> Default for Tesselation<Scalar, T, Params>
 where
-    Scalar: IntNumber + RTreeNum,
+    Scalar: RTreeNum,
     Params: RTreeParams,
 {
     #[inline]
@@ -90,7 +91,7 @@ where
 
 impl<Scalar, T, Params> RTreeObject for Tesselation<Scalar, T, Params>
 where
-    Scalar: IntNumber + RTreeNum,
+    Scalar: RTreeNum,
     Params: RTreeParams,
 {
     type Envelope = AABB<[Scalar; 2]>;
@@ -126,7 +127,7 @@ where
                     .to_convex_polygons()
                     .into_iter()
                     .map(move |contour| Face {
-                        contour,
+                        contour: contour.into_iter().map(|ip| [ip.x, ip.y]).collect(),
                         data: data.clone(),
                     })
             })
@@ -158,7 +159,7 @@ where
                 .collect::<Vec<_>>()
                 .iter(),
         )) {
-            let shape = vec![contour];
+            let shape = vec![contour.into_iter().map(Into::into).collect::<Vec<_>>()];
             if !alloc_shapes.is_empty() {
                 let mut overlay = Overlay::with_shapes(&alloc_shapes, slice::from_ref(&shape));
                 let local_graph = overlay
@@ -196,17 +197,21 @@ where
     /// In the given envelope `envelope`, find all faces with the same data and re-segment them
     /// into convex faces.
     pub fn optimize_envelope(&mut self, envelope: AABB<[Scalar; 2]>) {
-        let mut buckets = BTreeMap::<T, Vec<Vec<IntPoint<Scalar>>>>::new();
+        let mut buckets = BTreeMap::<T, Vec<Box<[[Scalar; 2]]>>>::new();
         for Face { contour, data } in self.rtree.drain_in_envelope_intersecting(envelope) {
             buckets.entry(data).or_default().push(contour);
         }
         // The insertion implementation automatically retriangulates and collects into convex polygons,
         // implicitly also mering adjacent polygons.
-        self.insert_impl(
-            buckets
-                .into_iter()
-                .map(|(data, shape)| (shape.into_iter().map(|i| vec![i]).collect(), data)),
-        );
+        self.insert_impl(buckets.into_iter().map(|(data, shape)| {
+            (
+                shape
+                    .into_iter()
+                    .map(|i| vec![i.into_iter().map(Into::into).collect()])
+                    .collect(),
+                data,
+            )
+        }));
     }
 
     pub fn rebalance(&mut self) {
@@ -216,7 +221,7 @@ where
 
     pub fn update_data<B, F>(&mut self, outer_contour: &[IntPoint<Scalar>], f: F) -> ControlFlow<B>
     where
-        F: Fn(&[IntPoint<Scalar>], &mut T) -> ControlFlow<B>,
+        F: Fn(&[[Scalar; 2]], &mut T) -> ControlFlow<B>,
     {
         self.rtree.locate_in_envelope_intersecting_int_mut(
             AABB::from_points(
@@ -229,7 +234,10 @@ where
             |Face { contour, data }| {
                 let mut overlay = PredicateOverlay::new(outer_contour.len() + contour.len());
                 overlay.add_contour(outer_contour, ShapeType::Subject);
-                overlay.add_contour(&*contour, ShapeType::Clip);
+                overlay.add_contour(
+                    &contour.iter().map(|i| (*i).into()).collect::<Vec<_>>(),
+                    ShapeType::Clip,
+                );
                 if !overlay.interiors_intersect() {
                     return ControlFlow::Continue(());
                 }
@@ -263,7 +271,7 @@ where
     Params: RTreeParams,
 {
     type VertexId = [Scalar; 2];
-    type FaceId = &'a [IntPoint<Scalar>];
+    type FaceId = &'a [[Scalar; 2]];
     type Scalar = Scalar;
 
     fn vertex_position(&self, vertex: Self::VertexId) -> [Scalar; 2] {
@@ -283,16 +291,14 @@ where
         &self,
         face: Self::FaceId,
     ) -> impl Iterator<Item = Self::VertexId> + '_ {
-        face.iter().map(|ip| [ip.x, ip.y])
+        face.iter().copied()
     }
 
     fn face_adjacent_faces(&self, face: Self::FaceId) -> impl Iterator<Item = Self::FaceId> + '_ {
         self.rtree
-            .locate_in_envelope_intersecting(AABB::from_points(
-                face.iter().map(|k| [k.x, k.y]).collect::<Vec<_>>().iter(),
-            ))
+            .locate_in_envelope_intersecting(AABB::from_points(face.iter()))
             .map(|i| &i.contour[..])
-            .filter(move |&i| i != face)
+            .filter(move |&i| i != face && self.portal_between(i, face).is_some())
     }
 
     /// The returned value should be (if any) of the form `[left vertex, right vertex]`, i.e. ordered clockwise.
@@ -304,17 +310,24 @@ where
         // All `contour`s in .rtree are CCW, so the same applies to `face_*` arguments.
         let mut face_from = face_from.to_vec();
         face_from.push(*face_from.first()?);
+        let ipface_from: Vec<IntPoint<Scalar>> =
+            face_from.iter().copied().map(Into::into).collect();
         let mut face_to = face_to.to_vec();
         face_to.push(*face_to.first()?);
+        let ipface_to: Vec<IntPoint<Scalar>> = face_to.iter().copied().map(Into::into).collect();
 
-        let ret = face_from.clip_path(
-            &face_to,
-            FillRule::EvenOdd,
-            ClipRule {
-                invert: false,
-                boundary_included: true,
-            },
-        );
+        let ret = ipface_from
+            .clip_path(
+                &ipface_to,
+                FillRule::EvenOdd,
+                ClipRule {
+                    invert: false,
+                    boundary_included: true,
+                },
+            )
+            .into_iter()
+            .map(|path| path.into_iter().map(|i| [i.x, i.y]).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
 
         let mut iter = ret.into_iter();
         let fi = iter.next()?;
@@ -325,7 +338,7 @@ where
             return None;
         };
         // `clip_path` already seems to produce a CW result from a CCW input.
-        Some([y, x].map(|i| [i.x, i.y]))
+        Some([y, x])
     }
 }
 
@@ -337,9 +350,7 @@ where
 {
     fn face_layers(&self, face: <Self as Topo2DComplex>::FaceId) -> LayerIds {
         self.rtree
-            .locate_in_envelope(AABB::from_points(
-                face.iter().map(|k| [k.x, k.y]).collect::<Vec<_>>().iter(),
-            ))
+            .locate_in_envelope(AABB::from_points(face.iter()))
             .find(move |&i| &i.contour[..] == face)
             .unwrap()
             .data
@@ -377,7 +388,7 @@ mod tests {
         );
 
         assert!(tess.rtree().contains(&Face {
-            contour: int_path![[2i32, 2], [1, 2], [1, 1], [2, 1]],
+            contour: vec![[2i32, 2], [1, 2], [1, 1], [2, 1]].into_boxed_slice(),
             data: {
                 let mut layers = LayerIds::default();
                 layers.insert(LayerId::from(0));
