@@ -12,27 +12,22 @@ use core::{cmp::Ordering, fmt, iter};
 use approx::AbsDiffEq;
 use num_traits::Zero;
 
-use super::{LayerIds, MultiLayerNavmesh, Topo2DComplex};
+use super::{Endpoint, MultiLayerNavmesh, Node, Topo2DComplex};
 use crate::LayerId;
 
-/// A node of a path from source to sink, including layer information
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Node<T> {
-    pub fixed: T,
-    pub layer: LayerId,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Endpoint<T> {
-    pub fixed: BTreeSet<T>,
-    pub layers: LayerIds,
-}
-
 /// The data for each step from source to sink with explicit layer transitions
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FunnelEntry<V> {
     Point(Node<V>),
     LayerTransition(LayerId, LayerId),
+}
+
+#[derive(Clone, Debug)]
+pub enum Output<T: Topo2DComplex, Score> {
+    /// A successful pathing result
+    Result(Vec<FunnelEntry<T::VertexId>>),
+
+    IntermediateStep(Node<T::FaceId>, Vec<(Node<T::FaceId>, Score)>),
 }
 
 struct BestPaths<S, T>(BTreeMap<Node<T>, Entry<S, T>>);
@@ -43,7 +38,7 @@ enum BestPathKey<F, V> {
     Vertex(V),
 }
 
-impl<S: Ord + fmt::Debug, T: Ord + fmt::Debug> BestPaths<S, T> {
+impl<S: Ord, T: Ord> BestPaths<S, T> {
     fn reconstruct_path<'a>(&'a self, current: &'a Node<T>) -> Vec<&'a Node<T>> {
         let mut current = current;
         let mut ret = vec![current];
@@ -113,7 +108,7 @@ where
         intermed_end: Option<&Node<T::FaceId>>,
         // the final triangle
         end: &Node<T::FaceId>,
-    ) -> (Vec<FunnelEntry<T::VertexId>>, Vec<Node<T::FaceId>>) {
+    ) -> Vec<FunnelEntry<T::VertexId>> {
         let end = Node {
             fixed: BestPathKey::Face(end.fixed),
             layer: end.layer,
@@ -127,7 +122,7 @@ where
             Some(intermed_end) => {
                 let mut best_path = best_paths.reconstruct_path(intermed_end);
                 if best_path.iter().find(|&&i| i == &end).is_some() {
-                    return (Vec::new(), Vec::new());
+                    return Vec::new();
                 }
                 best_path.push(&end);
                 best_path
@@ -137,7 +132,7 @@ where
         // reconstruct funnel
         if best_path.is_empty() {
             // unreachable
-            return (Vec::new(), Vec::new());
+            return Vec::new();
         }
         let start = match best_path.remove(0) {
             Node {
@@ -157,7 +152,7 @@ where
 
         if start.layer != best_path.first().unwrap().layer {
             // illegal move
-            return (Vec::new(), Vec::new());
+            return Vec::new();
         }
 
         ret.push(FunnelEntry::Point(funnel.apex.1));
@@ -178,7 +173,7 @@ where
             match (i.layer == j.layer, i.fixed == j.fixed) {
                 (true, true) | (false, false) => {
                     // invalid move
-                    return (Vec::new(), Vec::new());
+                    return Vec::new();
                 }
                 (false, true) => {
                     // layer transition
@@ -187,7 +182,7 @@ where
                 (true, false) => {
                     // face transition
                     let Some(portal) = self.mesh.portal_between(i.fixed, j.fixed) else {
-                        return (Vec::new(), Vec::new());
+                        return Vec::new();
                     };
                     funnel.push(portal.map(|fixed| {
                         (
@@ -253,7 +248,7 @@ where
             {
                 [None, None] => {
                     // all moves are illegal
-                    return (Vec::new(), Vec::new());
+                    return Vec::new();
                 }
                 [Some(closest), _] => (
                     closest,
@@ -274,7 +269,7 @@ where
             final_end.layer = current_layer;
         }
         ret.push(FunnelEntry::Point(final_end));
-        (ret, best_path)
+        ret
     }
 
     fn point_distance(&self, a: &[T::Scalar; 2], b: &[T::Scalar; 2]) -> Score {
@@ -289,8 +284,8 @@ where
         intermed_end: Option<&Node<T::FaceId>>,
         // the final triangle
         end: &Node<T::FaceId>,
-    ) -> Option<(Score, Vec<FunnelEntry<T::VertexId>>, Vec<Node<T::FaceId>>)> {
-        let (funneled, best_path) = self.funnel(best_paths, intermed_end, end);
+    ) -> Option<(Score, Vec<FunnelEntry<T::VertexId>>)> {
+        let funneled = self.funnel(best_paths, intermed_end, end);
 
         if funneled.is_empty() {
             return None;
@@ -317,7 +312,7 @@ where
                 );
         }
 
-        Some((score, funneled, best_path))
+        Some((score, funneled))
     }
 }
 
@@ -325,14 +320,6 @@ pub struct Astar<'a, T: Topo2DComplex, Score, Pnf> {
     best_paths: BestPaths<Score, BestPathKey<T::FaceId, T::VertexId>>,
     heap: BinaryHeap<Entry<Score, T::FaceId>>,
     env: Environment<'a, T, Score, Pnf>,
-}
-
-#[derive(Clone, Debug)]
-pub enum Output<T: Topo2DComplex, Score> {
-    /// A successful A* result
-    Result(Vec<FunnelEntry<T::VertexId>>),
-
-    IntermediateStep(Node<T::FaceId>, Vec<(Node<T::FaceId>, Score)>),
 }
 
 impl<T, Score, Pnf> Iterator for Astar<'_, T, Score, Pnf>
@@ -355,8 +342,11 @@ where
                 .find(|fixed| self.env.final_end.fixed.contains(fixed))
                 .is_some()
         {
-            let ret = self.env.funnel(&self.best_paths, None, &cur.key);
-            return Some(Output::Result(ret.0));
+            return Some(Output::Result(self.env.funnel(
+                &self.best_paths,
+                None,
+                &cur.key,
+            )));
         }
 
         // TODO(fogti): catch cases where this iteration has a worse score than the best path to this node
@@ -394,7 +384,7 @@ where
             .filter_map(|next_node| {
                 self.env
                     .calculate_score(&self.best_paths, Some(&cur.key), &next_node)
-                    .map(|(score, _, _)| (next_node, score))
+                    .map(|(score, _)| (next_node, score))
             })
             .collect::<Vec<_>>();
 
@@ -475,9 +465,6 @@ where
             .vertex_adjacent_faces(fixed_vertex)
             .collect::<BTreeSet<_>>()
         {
-            // no need to adjust best_paths, that stores only paths via faces,
-            // not vertex-face paths.
-
             // filter untraversable triangles
             for layer in &((&mesh.face_layers(inner_face)) & (&start.layers)) {
                 let node = Node {
@@ -491,7 +478,7 @@ where
                     },
                     bp_entry(layer),
                 );
-                let Some((score, _, _)) = env.calculate_score(&best_paths, None, &node) else {
+                let Some((score, _)) = env.calculate_score(&best_paths, None, &node) else {
                     continue;
                 };
 

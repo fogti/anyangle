@@ -4,8 +4,9 @@
 
 use anyangle::{
     flat::{
-        FrozenTesselation, GetLayerIds, LayerIds, Tesselation, Topo2DComplex,
-        astar::{Endpoint, FunnelEntry, Node, astar},
+        Endpoint, FrozenTesselation, GetLayerIds, LayerIds, Node, Tesselation,
+        astar::{FunnelEntry, astar},
+        constrained_pathing::pathing,
     },
     math::diagonal_taxicab::DiagonalTaxicabNorm,
 };
@@ -64,8 +65,29 @@ struct Demo {
     endpoints: [Obstacle; 2],
     norm: Norm,
     #[serde(default)]
+    pathing_algo: PathingAlgo,
+    #[serde(default)]
     amount_results: usize,
     layer_transition_penality: Scalar,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Deserialize,
+    serde::Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+enum PathingAlgo {
+    #[default]
+    Astar,
+    ConstrainedPathing,
 }
 
 #[derive(
@@ -122,7 +144,7 @@ async fn draw_navmesh(
     highlight_faces: Option<BTreeSet<u32>>,
 ) {
     const LAYER_ALPHA_FACTOR: f32 = LAYER_WEIGHT * 2. / core::f32::consts::PI;
-    for (face_id, (face, face_vertices)) in navmesh.faces_coordinates().enumerate() {
+    for (face_id, face) in navmesh.faces().iter().enumerate() {
         let face_id = face_id as u32;
         let color = if let Some(highlight_faces) = &highlight_faces
             && highlight_faces.contains(&face_id)
@@ -136,11 +158,14 @@ async fn draw_navmesh(
                 (face.data.0.count() as f32).atan() * LAYER_ALPHA_FACTOR,
             )
         };
-        let mut face_vertices = face_vertices
-            .map(|i| viewport.translate(i))
-            .collect::<Vec<_>>();
-        face_vertices.push(face_vertices.first().unwrap().clone());
-        for v in face_vertices.windows(2) {
+        for v in face
+            .contour
+            .iter()
+            .chain(face.contour.first())
+            .map(|&i| viewport.translate(&navmesh.vertices()[i as usize]))
+            .collect::<Vec<_>>()
+            .windows(2)
+        {
             draw_line(v[0].x, v[0].y, v[1].x, v[1].y, 1., color);
         }
     }
@@ -153,12 +178,12 @@ async fn main() {
         offset: [0., 0.],
     };
 
-    let Some(demo_fname) = std::env::args().nth(1) else {
-        eprintln!("USAGE: astar-demo DEMO_EXAMPLE_FILE.toml");
-        std::process::exit(1);
-    };
-
-    let demo = std::fs::read(demo_fname).expect("Unable to read demo file");
+    let demo = std::fs::read(
+        std::env::args()
+            .nth(1)
+            .expect("Expected one command line argument (demo filename)"),
+    )
+    .expect("Unable to read demo file");
     let demo: Demo = toml::from_slice(&demo[..]).expect("Unable to parse demo file");
 
     let all_layers: LayerIds = demo
@@ -187,7 +212,7 @@ async fn main() {
     {
         let root_envelope = navmesh.envelope();
         // make amount of faces minimal
-        navmesh.optimize_envelope(root_envelope);
+        //navmesh.optimize_envelope(root_envelope);
         // invert the layers for astar
         let _ = navmesh.update_data(
             &[
@@ -233,120 +258,219 @@ async fn main() {
         demo.amount_results
     };
 
+    macro_rules! handle_inputs {
+        ($pathing_result:ident) => {{
+            let (_, wheel) = mouse_wheel();
+            if wheel.abs() >= f32::EPSILON {
+                viewport.scroll_at(&mouse_position(), wheel);
+            }
+
+            if is_quit_requested() {
+                return;
+            }
+
+            if is_key_pressed(KeyCode::Space) && amount_results != 0 {
+                $pathing_result = None;
+                clear_input_queue();
+            }
+        }};
+    }
+
     let mut sleeper = 0;
     let mut highlighted_faces = None;
 
-    let mut astar_data = astar(
-        &navmesh,
-        demo.norm.fun(),
-        endpoints[0].clone(),
-        endpoints[1].clone(),
-        0,
-        DiagonalTaxicabNorm {
-            along_axis: demo.layer_transition_penality,
-            diagonal: 0,
-        },
-    );
+    match demo.pathing_algo {
+        PathingAlgo::Astar => {
+            let mut astar_data = astar(
+                &navmesh,
+                demo.norm.fun(),
+                endpoints[0].clone(),
+                endpoints[1].clone(),
+                0,
+                DiagonalTaxicabNorm {
+                    along_axis: demo.layer_transition_penality,
+                    diagonal: 0,
+                },
+            );
 
-    let mut pathing_result = None;
+            let mut pathing_result = None;
 
-    loop {
-        if pathing_result.is_none() && amount_results != 0 && sleeper == 0 {
-            let mut iterated = false;
-            for tmp in &mut astar_data {
-                iterated = true;
-                match tmp {
-                    anyangle::flat::astar::Output::Result(res) => {
-                        println!("astar result:");
-                        for i in &res {
-                            print!("  - ");
-                            match i {
-                                FunnelEntry::Point(Node { fixed, layer }) => {
+            loop {
+                if pathing_result.is_none() && amount_results != 0 && sleeper == 0 {
+                    let mut iterated = false;
+                    for tmp in &mut astar_data {
+                        iterated = true;
+                        match tmp {
+                            anyangle::flat::astar::Output::Result(res) => {
+                                println!("astar result:");
+                                for i in &res {
+                                    print!("  - ");
+                                    use anyangle::flat::Topo2DComplex;
+                                    match i {
+                                        FunnelEntry::Point(Node { fixed, layer }) => {
+                                            println!(
+                                                "point {:?} on layer {layer:?}",
+                                                navmesh.vertex_position(*fixed)
+                                            );
+                                        }
+                                        FunnelEntry::LayerTransition(from_layer, to_layer) => {
+                                            println!(
+                                                "layer transition from {from_layer:?} to {to_layer:?}"
+                                            );
+                                        }
+                                    }
+                                }
+                                println!();
+
+                                pathing_result = Some(res);
+                                highlighted_faces = None;
+                                amount_results -= 1;
+                                break;
+                            }
+                            // TODO: visualize intermediates
+                            _ => {}
+                        }
+                    }
+                    if !iterated {
+                        amount_results = 0;
+                    }
+                }
+
+                sleeper += 1;
+                sleeper %= 10;
+
+                // handle input
+                handle_inputs!(pathing_result);
+
+                // draw stuff
+                clear_background(BLACK);
+                draw_navmesh(&navmesh, &viewport, highlighted_faces.clone()).await;
+
+                if let Some(pathing_result) = &pathing_result {
+                    let mut last_point: Option<Node<u32>> = None;
+                    let mut encountered_layer_transition = false;
+                    for i in pathing_result {
+                        match i {
+                            FunnelEntry::LayerTransition(_, _) => {
+                                encountered_layer_transition = true;
+                            }
+                            FunnelEntry::Point(pt) => {
+                                if let Some(last_pt) = last_point {
+                                    let points = [last_pt.fixed, pt.fixed].map(|fixed| {
+                                        viewport.translate(&navmesh.vertices()[fixed as usize])
+                                    });
+                                    draw_line(
+                                        points[0][0],
+                                        points[0][1],
+                                        points[1][0],
+                                        points[1][1],
+                                        1.0,
+                                        if encountered_layer_transition {
+                                            MAGENTA
+                                        } else {
+                                            RED
+                                        },
+                                    );
+                                    encountered_layer_transition &= last_pt.fixed == pt.fixed;
+                                } else {
+                                    encountered_layer_transition = false;
+                                }
+                                last_point = Some(*pt);
+                            }
+                        }
+                    }
+                }
+
+                next_frame().await;
+            }
+        }
+
+        PathingAlgo::ConstrainedPathing => {
+            let mut pathing_data = pathing(
+                &navmesh,
+                demo.norm.fun(),
+                endpoints[0].clone(),
+                endpoints[1].clone(),
+                0,
+                DiagonalTaxicabNorm {
+                    along_axis: demo.layer_transition_penality,
+                    diagonal: 0,
+                },
+            );
+
+            let mut pathing_result = None;
+
+            loop {
+                if pathing_result.is_none() && amount_results != 0 && sleeper == 0 {
+                    if let Some(tmp) = pathing_data.next() {
+                        match tmp {
+                            anyangle::flat::constrained_pathing::Output::Result(res) => {
+                                println!("constrained pathing result:");
+                                for Node { fixed, layer } in &res {
+                                    use anyangle::flat::Topo2DComplex;
                                     println!(
-                                        "point {:?} on layer {layer:?}",
+                                        "  - point {:?} on layer {layer:?}",
                                         navmesh.vertex_position(*fixed)
                                     );
                                 }
-                                FunnelEntry::LayerTransition(from_layer, to_layer) => {
-                                    println!(
-                                        "layer transition from {from_layer:?} to {to_layer:?}"
-                                    );
-                                }
+                                println!();
+
+                                pathing_result = Some(res);
+                                highlighted_faces = None;
+                                amount_results -= 1;
+                            }
+                            anyangle::flat::constrained_pathing::Output::IntermediateStep(
+                                face,
+                                next_ones,
+                            ) => {
+                                highlighted_faces = Some(
+                                    core::iter::once(face.fixed)
+                                        .chain(next_ones.iter().map(|i| i.0.fixed))
+                                        .collect(),
+                                );
                             }
                         }
-                        println!();
-
-                        pathing_result = Some(res);
-                        highlighted_faces = None;
-                        amount_results -= 1;
-                        break;
+                    } else {
+                        amount_results = 0;
                     }
-                    // TODO: visualize intermediates
-                    _ => {}
                 }
-            }
-            if !iterated {
-                amount_results = 0;
-            }
-        }
+                sleeper += 1;
+                sleeper %= 10;
 
-        sleeper += 1;
-        sleeper %= 10;
+                // handle input
+                handle_inputs!(pathing_result);
 
-        // handle input
-        let (_, wheel) = mouse_wheel();
-        if wheel.abs() >= f32::EPSILON {
-            viewport.scroll_at(&mouse_position(), wheel);
-        }
+                // draw stuff
+                clear_background(BLACK);
+                draw_navmesh(&navmesh, &viewport, highlighted_faces.clone()).await;
 
-        if is_quit_requested() {
-            return;
-        }
-
-        if is_key_pressed(KeyCode::Space) && amount_results != 0 {
-            pathing_result = None;
-            clear_input_queue();
-        }
-
-        // draw stuff
-        clear_background(BLACK);
-        draw_navmesh(&navmesh, &viewport, highlighted_faces.clone()).await;
-
-        if let Some(pathing_result) = &pathing_result {
-            let mut last_point: Option<Node<u32>> = None;
-            let mut encountered_layer_transition = false;
-            for i in pathing_result {
-                match i {
-                    FunnelEntry::LayerTransition(_, _) => {
-                        encountered_layer_transition = true;
-                    }
-                    FunnelEntry::Point(pt) => {
-                        if let Some(last_pt) = last_point {
-                            let points = [last_pt.fixed, pt.fixed].map(|fixed| {
-                                viewport.translate(&navmesh.vertices()[fixed as usize])
-                            });
+                if let Some(pathing_result) = &pathing_result {
+                    for i in pathing_result.array_windows::<2>() {
+                        if i[0].fixed != i[1].fixed {
+                            let points = i
+                                .map(|j| viewport.translate(&navmesh.vertices()[j.fixed as usize]));
                             draw_line(
                                 points[0][0],
                                 points[0][1],
                                 points[1][0],
                                 points[1][1],
                                 1.0,
-                                if encountered_layer_transition {
+                                if i[0].layer != i[1].layer {
                                     MAGENTA
                                 } else {
                                     RED
                                 },
                             );
-                            encountered_layer_transition &= last_pt.fixed == pt.fixed;
-                        } else {
-                            encountered_layer_transition = false;
+                        } else if i[0].layer != i[1].layer {
+                            let point =
+                                viewport.translate(&navmesh.vertices()[i[0].fixed as usize]);
+                            draw_circle(point[0], point[1], 5.0, MAGENTA);
                         }
-                        last_point = Some(*pt);
                     }
                 }
+
+                next_frame().await;
             }
         }
-
-        next_frame().await;
     }
 }

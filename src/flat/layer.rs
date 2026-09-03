@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use alloc::vec::Vec;
-use core::{fmt, ops};
+use core::{
+    cmp::{Ord as _, Ordering},
+    fmt, ops,
+};
 
 use crate::LayerId;
 
@@ -92,6 +95,32 @@ impl LayerIds {
         }
 
         ret
+    }
+
+    pub fn adjacent_layer_to_but_away_from(&self, i: LayerId, k: LayerId) -> Option<LayerId> {
+        let iu: usize = i.into();
+        let ku: usize = k.into();
+        match iu.cmp(&ku) {
+            Ordering::Equal => None,
+            Ordering::Less => {
+                if let Some(j) = iu.checked_sub(1)
+                    && self.0.contains(j)
+                {
+                    Some(LayerId::from(j))
+                } else {
+                    None
+                }
+            }
+            Ordering::Greater => {
+                if let Some(j) = iu.checked_add(1)
+                    && self.0.contains(j)
+                {
+                    Some(LayerId::from(j))
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     pub fn is_on_layer(&self, l: LayerId) -> bool {
