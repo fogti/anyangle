@@ -6,6 +6,7 @@ ext_boundary = [
 ]
 
 norm = "diagonal-taxicab"
+pathing_algo = "constrained-pathing"
 
 layer_transition_penality = 10
 

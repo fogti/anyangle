@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use core::fmt;
+use core::{
+    cmp::{Ord, Ordering},
+    fmt,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -32,6 +35,15 @@ impl LayerId {
     #[inline]
     pub(crate) fn checked_sub_one(self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
+    }
+
+    #[inline]
+    pub fn distance(&self, other: &Self) -> u32 {
+        match self.0.cmp(&other.0) {
+            Ordering::Less => other.0 - self.0,
+            Ordering::Equal => 0,
+            Ordering::Greater => self.0 - other.0,
+        }
     }
 }
 
