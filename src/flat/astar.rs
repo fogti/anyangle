@@ -149,10 +149,10 @@ where
             },
             _ => panic!("Start of every path is a vertex"),
         };
-        let mut funnel = crate::funnel::SimpleFunnel::<T::Scalar, Node<T::VertexId>>::new(
-            (self.mesh.vertex_position(start.fixed), start),
-            self.epsilon.clone(),
-        );
+        let mut funnel = crate::funnel::SimpleFunnel::<T::Scalar, Node<T::VertexId>>::new((
+            self.mesh.vertex_position(start.fixed),
+            start,
+        ));
         let mut ret = Vec::<FunnelEntry<T::VertexId>>::new();
 
         if start.layer != best_path.first().unwrap().layer {
@@ -198,7 +198,7 @@ where
                             },
                         )
                     });
-                    if let Some((_, (_, new_apex))) = funnel.advance(portal) {
+                    if let Some((_, (_, new_apex))) = funnel.advance(self.epsilon.clone(), portal) {
                         ret.push(FunnelEntry::Point(*new_apex));
                     }
                 }
@@ -220,7 +220,10 @@ where
                 );
                 let tmp = funnel
                     .clone()
-                    .advance([final_end_pos.clone(), final_end_pos.clone()])
+                    .advance(
+                        self.epsilon.clone(),
+                        [final_end_pos.clone(), final_end_pos.clone()],
+                    )
                     .map(|(_, new_apex)| new_apex.clone());
                 let length = if let Some((new_apex_pos, _)) = &tmp {
                     self.point_distance(final_measure_point, new_apex_pos)
