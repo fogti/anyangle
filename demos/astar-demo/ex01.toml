@@ -7,7 +7,7 @@ ext_boundary = [
 
 norm = "diagonal-taxicab"
 pathing_algo = "constrained-pathing"
-amount_results = 3
+amount_results = 100
 
 layer_transition_penality = 10
 
