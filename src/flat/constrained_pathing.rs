@@ -210,9 +210,8 @@ where
                         layer: edat.funnel.apex.1.layer,
                     },
                 );
-                let tmp = edat
-                    .funnel
-                    .clone()
+                let mut final_funnel = edat.funnel.clone();
+                let tmp = final_funnel
                     .advance(
                         self.epsilon.clone(),
                         [final_end_pos.clone(), final_end_pos.clone()],
@@ -224,11 +223,20 @@ where
                 } else {
                     super::point_distance(&self.point_norm, final_measure_point, &final_end_pos.0)
                 };
-                (length, tmp.map(|(_, fixed)| fixed), final_end_pos.1)
+                (
+                    length,
+                    final_funnel,
+                    tmp.map(|(_, fixed)| fixed),
+                    final_end_pos.1,
+                )
             })
             .collect();
-        choices.sort_by_key(|(k, _, _)| k.clone());
-        let &(_, maybe_new_apex, mut final_end) = choices.first().unwrap();
+        choices.sort_by_key(|(k, _, _, _)| k.clone());
+        let &(_, ref final_funnel, maybe_new_apex, mut final_end) = choices.first().unwrap();
+        println!(
+            "  edat {:?} end {:?} final funnel {:?}",
+            edat.node, end, final_funnel
+        );
 
         if let Some(new_apex) = maybe_new_apex {
             best_path.push(new_apex);
