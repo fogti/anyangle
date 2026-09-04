@@ -53,6 +53,13 @@ impl fmt::Debug for LayerId {
     }
 }
 
+impl fmt::Display for LayerId {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
 impl From<usize> for LayerId {
     #[inline]
     fn from(x: usize) -> LayerId {

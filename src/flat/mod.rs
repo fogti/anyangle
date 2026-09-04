@@ -54,10 +54,16 @@ pub trait MultiLayerNavmesh: Topo2DComplex {
 }
 
 /// A node of a path from source to sink, including layer information
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node<T> {
     pub fixed: T,
     pub layer: LayerId,
+}
+
+impl<T: fmt::Debug> fmt::Debug for Node<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Node@{}({:?})", self.layer, self.fixed)
+    }
 }
 
 /// An endpoint for a pathing operation

@@ -39,6 +39,15 @@ obstacles = [
         ],
         layers = [0]
     },
+    {
+        exterior = [
+            [5, 5],
+            [5, 95],
+            [95, 95],
+            [95, 5],
+        ],
+        layers = []
+    },
 ]
 
 endpoints = [

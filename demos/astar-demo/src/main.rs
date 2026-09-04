@@ -205,7 +205,7 @@ async fn main() {
     {
         let root_envelope = navmesh.envelope();
         // make amount of faces minimal
-        navmesh.optimize_envelope(root_envelope);
+        //navmesh.optimize_envelope(root_envelope);
         // invert the layers for astar
         let _ = navmesh.update_data(
             &[

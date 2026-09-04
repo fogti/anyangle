@@ -40,8 +40,9 @@ impl<S, T: Copy + Ord> BestPaths<S, T> {
 }
 
 struct QueueEntry<T: Topo2DComplex> {
-    prev_node: Option<Node<T::FaceId>>,
     node: Node<T::FaceId>,
+    /// Nodes processed since the last `apex` change
+    prev_nodes: BTreeSet<Node<T::FaceId>>,
     funnel: SimpleFunnel<T::Scalar, Node<T::VertexId>>,
 }
 
@@ -51,7 +52,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            prev_node: self.prev_node,
+            prev_nodes: self.prev_nodes.clone(),
             node: self.node,
             funnel: self.funnel.clone(),
         }
@@ -63,7 +64,9 @@ where
     T: Topo2DComplex,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.prev_node == other.prev_node && self.node == other.node && self.funnel == other.funnel
+        self.prev_nodes == other.prev_nodes
+            && self.node == other.node
+            && self.funnel == other.funnel
     }
 }
 
@@ -92,7 +95,7 @@ where
     fn cmp(&self, other: &Self) -> Ordering {
         self.node
             .cmp(&other.node)
-            .then_with(|| self.prev_node.cmp(&other.prev_node))
+            .then_with(|| self.prev_nodes.cmp(&other.prev_nodes))
             .then_with(|| self.funnel.cmp(&other.funnel))
     }
 }
@@ -104,8 +107,8 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QueueEntry")
-            .field("prev_node", &self.prev_node)
             .field("node", &self.node)
+            .field("prev_nodes", &self.prev_nodes)
             .field("funnel", &self.funnel)
             .finish()
     }
@@ -118,7 +121,7 @@ impl<T: Topo2DComplex> QueueEntry<T> {
         epsilon: &<T::Scalar as AbsDiffEq>::Epsilon,
         next: Node<T::FaceId>,
     ) -> bool {
-        if self.node == next || self.prev_node == Some(next) {
+        if self.node == next || self.prev_nodes.contains(&next) {
             // invalid move
             return false;
         }
@@ -137,10 +140,13 @@ impl<T: Topo2DComplex> QueueEntry<T> {
                     },
                 )
             });
-            self.funnel.advance(epsilon.clone(), portal);
+            if self.funnel.advance(epsilon.clone(), portal).is_some() {
+                self.prev_nodes.clear();
+            }
         }
 
-        self.prev_node = Some(core::mem::replace(&mut self.node, next));
+        self.prev_nodes
+            .insert(core::mem::replace(&mut self.node, next));
         true
     }
 }
@@ -175,11 +181,17 @@ where
         let mut best_path = self.best_paths.reconstruct_path(edat.funnel.apex.1);
         if let Some(&end) = end {
             let old_apex = edat.funnel.apex.1;
+            //let mut all_faces_on_way = edat.prev_nodes.clone();
             if !edat.funnel(self.mesh, &self.epsilon, end) {
                 return None;
             }
             let new_apex = edat.funnel.apex.1;
             if old_apex != new_apex {
+                // check that path is possible given the specified layers
+                // collect all faces traversed on the way
+                //all_faces_on_way.extend(edat.prev_nodes.clone());
+                //
+
                 best_path.push(new_apex);
             }
         }
@@ -292,6 +304,14 @@ where
     fn next(&mut self) -> Option<Output<T, Score>> {
         // main search loop
         let cur = self.heap.pop()?;
+        println!("Pathing::next: {:?}", cur.1);
+        println!(
+            "  with face vertices: {:?}",
+            self.mesh
+                .face_adjacent_vertices(cur.1.node.fixed)
+                .map(|v| self.mesh.vertex_position(v))
+                .collect::<Vec<_>>()
+        );
         let ckn = cur.1.node;
         if self.final_end.layers.is_on_layer(ckn.layer)
             && self
@@ -367,6 +387,7 @@ where
                     }
                 }
             }
+            println!("  yield {:?} -> {:?}", ckn, edat);
             ret.push((next_node, score.clone()));
             self.heap.push((cmp::Reverse(score), edat));
         }
@@ -415,7 +436,7 @@ where
                     layer,
                 };
                 let edat = QueueEntry {
-                    prev_node: None,
+                    prev_nodes: Default::default(),
                     node: Node {
                         fixed: inner_face,
                         layer,
