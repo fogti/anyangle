@@ -435,7 +435,7 @@ async fn main() {
                     }
                 }
                 sleeper += 1;
-                sleeper %= 100;
+                sleeper %= 10;
 
                 // handle input
                 handle_inputs!(pathing_result);

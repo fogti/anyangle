@@ -42,7 +42,7 @@ impl<S, T: Copy + Ord> BestPaths<S, T> {
 struct QueueEntry<T: Topo2DComplex> {
     node: Node<T::FaceId>,
     /// Nodes processed since the last `apex` change
-    prev_nodes: BTreeSet<Node<T::FaceId>>,
+    //prev_nodes: BTreeSet<Node<T::FaceId>>,
     funnel: SimpleFunnel<T::Scalar, Node<T::VertexId>>,
 }
 
@@ -52,7 +52,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            prev_nodes: self.prev_nodes.clone(),
+            //prev_nodes: self.prev_nodes.clone(),
             node: self.node,
             funnel: self.funnel.clone(),
         }
@@ -64,8 +64,9 @@ where
     T: Topo2DComplex,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.prev_nodes == other.prev_nodes
-            && self.node == other.node
+        //self.prev_nodes == other.prev_nodes
+            //&&
+            self.node == other.node
             && self.funnel == other.funnel
     }
 }
@@ -95,7 +96,7 @@ where
     fn cmp(&self, other: &Self) -> Ordering {
         self.node
             .cmp(&other.node)
-            .then_with(|| self.prev_nodes.cmp(&other.prev_nodes))
+            //.then_with(|| self.prev_nodes.cmp(&other.prev_nodes))
             .then_with(|| self.funnel.cmp(&other.funnel))
     }
 }
@@ -108,7 +109,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QueueEntry")
             .field("node", &self.node)
-            .field("prev_nodes", &self.prev_nodes)
+            //.field("prev_nodes", &self.prev_nodes)
             .field("funnel", &self.funnel)
             .finish()
     }
@@ -116,7 +117,7 @@ where
 
 impl<T: Topo2DComplex> QueueEntry<T> {
     fn funnel(&mut self, mesh: &T, next: Node<T::FaceId>) -> bool {
-        if self.node == next || self.prev_nodes.contains(&next) {
+        if self.node == next /* || self.prev_nodes.contains(&next) */ {
             // invalid move
             return false;
         }
@@ -138,8 +139,8 @@ impl<T: Topo2DComplex> QueueEntry<T> {
             self.funnel.push(portal);
         }
 
-        self.prev_nodes
-            .insert(core::mem::replace(&mut self.node, next));
+        //self.prev_nodes
+        //    .insert(core::mem::replace(&mut self.node, next));
         true
     }
 }
@@ -174,6 +175,7 @@ where
         let mut best_path = self.best_paths.reconstruct_path(edat.funnel.apex.1);
         let orig_best_path_len = best_path.len();
         if let Some(&end) = end {
+            //let orig_node = edat.node;
             if !edat.funnel(self.mesh, end) {
                 return None;
             }
@@ -182,6 +184,10 @@ where
                     .with_epsilon(self.epsilon.clone())
                     .map(|(_, node)| node),
             );
+            //if best_path.len() != orig_best_path_len {
+            //    edat.prev_nodes.clear();
+            //    edat.prev_nodes.insert(orig_node);
+            //}
         }
         let edat = edat;
 
@@ -429,7 +435,7 @@ where
                     layer,
                 };
                 let edat = QueueEntry {
-                    prev_nodes: Default::default(),
+                    //prev_nodes: Default::default(),
                     node: Node {
                         fixed: inner_face,
                         layer,
