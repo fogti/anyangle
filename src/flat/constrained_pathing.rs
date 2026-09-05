@@ -9,7 +9,7 @@ use alloc::{
 };
 use core::{
     cmp::{self, Ordering},
-    fmt,
+    fmt, iter,
 };
 
 use approx::AbsDiffEq;
@@ -115,12 +115,7 @@ where
 }
 
 impl<T: Topo2DComplex> QueueEntry<T> {
-    fn funnel(
-        &mut self,
-        mesh: &T,
-        epsilon: &<T::Scalar as AbsDiffEq>::Epsilon,
-        next: Node<T::FaceId>,
-    ) -> bool {
+    fn funnel(&mut self, mesh: &T, next: Node<T::FaceId>) -> bool {
         if self.node == next || self.prev_nodes.contains(&next) {
             // invalid move
             return false;
@@ -140,9 +135,7 @@ impl<T: Topo2DComplex> QueueEntry<T> {
                     },
                 )
             });
-            if self.funnel.advance(epsilon.clone(), portal).is_some() {
-                self.prev_nodes.clear();
-            }
+            self.funnel.push(portal);
         }
 
         self.prev_nodes
@@ -176,28 +169,23 @@ where
         &self,
         base: &QueueEntry<T>,
         end: Option<&Node<T::FaceId>>,
-    ) -> Option<(QueueEntry<T>, Vec<Node<T::VertexId>>)> {
+    ) -> Option<(QueueEntry<T>, Vec<Node<T::VertexId>>, usize)> {
         let mut edat = base.clone();
         let mut best_path = self.best_paths.reconstruct_path(edat.funnel.apex.1);
+        let orig_best_path_len = best_path.len();
         if let Some(&end) = end {
-            let old_apex = edat.funnel.apex.1;
-            //let mut all_faces_on_way = edat.prev_nodes.clone();
-            if !edat.funnel(self.mesh, &self.epsilon, end) {
+            if !edat.funnel(self.mesh, end) {
                 return None;
             }
-            let new_apex = edat.funnel.apex.1;
-            if old_apex != new_apex {
-                // check that path is possible given the specified layers
-                // collect all faces traversed on the way
-                //all_faces_on_way.extend(edat.prev_nodes.clone());
-                //
-
-                best_path.push(new_apex);
-            }
+            best_path.extend(
+                edat.funnel
+                    .with_epsilon(self.epsilon.clone())
+                    .map(|(_, node)| node),
+            );
         }
         let edat = edat;
 
-        let final_measure_point = &edat.funnel.apex.0;
+        let final_measure_point = &edat.funnel.apex;
         let mut choices: Vec<_> = self
             .final_end
             .fixed
@@ -211,35 +199,27 @@ where
                     },
                 );
                 let mut final_funnel = edat.funnel.clone();
-                let tmp = final_funnel
-                    .advance(
-                        self.epsilon.clone(),
-                        [final_end_pos.clone(), final_end_pos.clone()],
-                    )
-                    .map(|(_, new_apex)| new_apex.clone());
-                let length = if let Some((new_apex_pos, _)) = &tmp {
-                    super::point_distance(&self.point_norm, final_measure_point, new_apex_pos)
-                        + super::point_distance(&self.point_norm, new_apex_pos, &final_end_pos.0)
-                } else {
-                    super::point_distance(&self.point_norm, final_measure_point, &final_end_pos.0)
-                };
-                (
-                    length,
-                    final_funnel,
-                    tmp.map(|(_, fixed)| fixed),
-                    final_end_pos.1,
-                )
+                final_funnel.push([final_end_pos.clone(), final_end_pos.clone()]);
+                let final_stretch = final_funnel
+                    .with_epsilon(self.epsilon.clone())
+                    .collect::<Vec<_>>();
+                let final_stretch_positions = iter::once(final_measure_point.0.clone())
+                    .chain(final_stretch.iter().map(|(pos, _)| pos.clone()))
+                    .chain(iter::once(final_end_pos.0))
+                    .collect::<Vec<_>>();
+                let length = final_stretch_positions.array_windows::<2>().fold(
+                    Zero::zero(),
+                    |length: Score, [from, to]| {
+                        length + super::point_distance(&self.point_norm, from, to)
+                    },
+                );
+                (length, final_stretch, final_end_pos.1)
             })
             .collect();
-        choices.sort_by_key(|(k, _, _, _)| k.clone());
-        let &(_, ref final_funnel, maybe_new_apex, mut final_end) = choices.first().unwrap();
-        println!(
-            "  edat {:?} end {:?} final funnel {:?}",
-            edat.node, end, final_funnel
-        );
-
-        if let Some(new_apex) = maybe_new_apex {
-            best_path.push(new_apex);
+        choices.sort_by_key(|(k, _, _)| k.clone());
+        let &(_, ref final_stretch, mut final_end) = choices.first().unwrap();
+        for (_, new_apex) in final_stretch {
+            best_path.push(*new_apex);
             final_end.layer = new_apex.layer;
         }
         if !self.final_end.layers.is_on_layer(final_end.layer) {
@@ -271,15 +251,15 @@ where
             final_end.layer = current_layer;
         }
         best_path.push(final_end);
-        Some((edat, best_path))
+        Some((edat, best_path, orig_best_path_len))
     }
 
     fn calculate_score(
         &self,
         base: &QueueEntry<T>,
         end: Option<&Node<T::FaceId>>,
-    ) -> Option<(Score, QueueEntry<T>)> {
-        let (edat, best_path) = self.funnel(base, end)?;
+    ) -> Option<(Score, QueueEntry<T>, Vec<Node<T::VertexId>>, usize)> {
+        let (edat, best_path, orig_best_path_len) = self.funnel(base, end)?;
 
         let mut layer_transitions = 0;
         let score = best_path.windows(2).fold(Score::zero(), |score, i| {
@@ -295,7 +275,7 @@ where
             score + self.layer_transition_penality.clone()
         });
 
-        Some((score, edat))
+        Some((score, edat, best_path, orig_best_path_len))
     }
 }
 
@@ -364,28 +344,31 @@ where
             layer,
         });
 
-        let next_nodes = face_transition
-            .chain(layer_transition)
-            // weigh candidates
-            .filter_map(|next_node| {
-                self.calculate_score(&cur.1, Some(&next_node))
-                    .map(|(score, edat)| (next_node, score, edat))
-            })
-            .collect::<Vec<_>>();
-
         let mut ret = Vec::new();
-        for (next_node, score, edat) in next_nodes {
-            if edat.funnel.apex.1 != cur.1.funnel.apex.1 {
+        for next_node in face_transition.chain(layer_transition) {
+            let Some((score, edat, best_path, orig_best_path_len)) =
+                self.calculate_score(&cur.1, Some(&next_node))
+            else {
+                continue;
+            };
+
+            let mut unskip = false;
+            for pair in best_path[orig_best_path_len.checked_sub(1).unwrap()..].array_windows::<2>()
+            {
                 use alloc::collections::btree_map::Entry;
-                let bp_entry = self.best_paths.0.entry(edat.funnel.apex.1);
+                let bp_entry = self.best_paths.0.entry(pair[1]);
                 // filter cases of worse newer scores
+                // this is quite cursed and might lead to some problems
+                // maybe we should instead store entire chains of nodes
+                // in best-path entries instead
                 if let Entry::Occupied(occ) = &bp_entry
                     && let (old_score, _) = occ.get()
                     && &score >= old_score
                 {
                     continue;
                 }
-                let new_bp_data = (score.clone(), cur.1.funnel.apex.1);
+                unskip = true;
+                let new_bp_data = (score.clone(), pair[0]);
                 match bp_entry {
                     Entry::Occupied(mut occ) => {
                         occ.insert(new_bp_data);
@@ -395,9 +378,11 @@ where
                     }
                 }
             }
-            println!("  yield {:?} -> {:?}", ckn, edat);
-            ret.push((next_node, score.clone()));
-            self.heap.push((cmp::Reverse(score), edat));
+            if unskip {
+                println!("  yield {:?} -> {:?}", ckn, edat);
+                ret.push((next_node, score.clone()));
+                self.heap.push((cmp::Reverse(score), edat));
+            }
         }
 
         Some(Output::IntermediateStep(ckn, ret))
@@ -451,7 +436,7 @@ where
                     },
                     funnel: SimpleFunnel::new((start_pos.clone(), start_vertex_node)),
                 };
-                let Some((score, _)) = env.calculate_score(&edat, None) else {
+                let Some((score, _, _, _)) = env.calculate_score(&edat, None) else {
                     continue;
                 };
 
