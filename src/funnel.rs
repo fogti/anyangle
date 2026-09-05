@@ -100,4 +100,22 @@ mod tests {
         );
         assert_eq!(x.advance(0, [([80, -10], 7), ([80, -10], 8)]), None);
     }
+
+    #[test]
+    // See issue #49
+    //
+    // TODO(fogti): the behavior below is afaik wrong,
+    // this should additionally yield [10,10] and [20,40].
+    //
+    // This test is here to document the behavior regarding the seemingly-wrong trace that
+    // is the main anchor point of the issue mentioned above,
+    // such that we have something to compare against when we attempt to fix this later.
+    fn t_issue49() {
+        let mut x = SimpleFunnel::<i32, u8>::new(([20, 20], 7));
+        assert_eq!(x.advance(0, [([20, 10], 6), ([95, 5], 14)]), None);
+        assert_eq!(x.advance(0, [([10, 10], 4), ([5, 5], 2)]), Some((([20, 20], 7), &([20, 10], 6))));
+        assert_eq!(x.advance(0, [([10, 20], 5), ([5, 95], 3)]), None);
+        assert_eq!(x.advance(0, [([20, 40], 8), ([5, 95], 3)]), Some((([20, 10], 6), &([10, 20], 5))));
+        assert_eq!(x.advance(0, [([40, 40], 10), ([40, 40], 10)]), None);
+    }
 }
