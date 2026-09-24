@@ -380,6 +380,7 @@ where
         // validate that the R-tree doesn't contain any overlapping entries
         let mut overlapping_faces = None;
 
+        /*
         'outer: for i in &rtree {
             let i_contour_for_overlay = i.contour.iter().map(|i| (*i).into()).collect::<Vec<_>>();
             for j in rtree.locate_in_envelope_intersecting(AABB::from_points(i.contour.iter())) {
@@ -398,6 +399,7 @@ where
                 }
             }
         }
+        */
 
         match overlapping_faces {
             None => Ok(Self { rtree }),
@@ -482,6 +484,7 @@ where
             return None;
         };
         // `clip_path` already seems to produce a CW result from a CCW input.
+        //println!("portal_between {:?} / {:?} → {:?}", face_from, face_to, &[y, x]);
         Some([y, x])
     }
 }
@@ -573,10 +576,10 @@ where
             .collect();
         vertices.sort_unstable();
         vertices.dedup();
-        let vertices = vertices.into_boxed_slice();
+        //let vertices = vertices.into_boxed_slice();
         assert!(vertices.len() <= max_slice_len);
         // reverse mapping from vertices to indices
-        let vertices_rev: BTreeMap<_, _> = vertices
+        let mut vertices_rev: BTreeMap<_, _> = vertices
             .iter()
             .enumerate()
             .map(|(id, vertex)| (*vertex, id as u32))
@@ -617,21 +620,30 @@ where
                 face.contour.iter().map(|&i| vertices[i as usize]).collect();
             face.neighbours = self
                 .face_adjacent_faces(&face_contour)
-                .map(|neighbour| {
-                    // `face_adjacent_faces` already makes sure that the following
-                    // unwrap always succeeds.
+                .filter_map(|neighbour| {
                     let [portal_lhs, portal_rhs] = self
-                        .portal_between(&face_contour, neighbour)
-                        .unwrap()
-                        .map(|vertex| vertices_rev[&vertex]);
-                    FrozenFaceNeighbour {
+                        .portal_between(&face_contour, neighbour)?
+                        .map(|vertex| {
+                            if let Some(&x) = vertices_rev.get(&vertex) {
+                                x
+                            } else {
+                                let pos = vertices.len() as u32;
+                                vertices.push(vertex);
+                                vertices_rev.insert(vertex, pos);
+                                pos
+                            }
+                        });
+                    Some(FrozenFaceNeighbour {
                         face_id: faces_rev[neighbour],
                         portal_lhs,
                         portal_rhs,
-                    }
+                    })
                 })
                 .collect();
         }
+
+        let vertices = vertices.into_boxed_slice();
+        assert!(vertices.len() <= max_slice_len);
 
         let vertex_adj_faces: Box<[_]> = vertex_adj_faces
             .into_iter()
