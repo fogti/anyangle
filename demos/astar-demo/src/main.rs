@@ -60,12 +60,19 @@ impl Viewport {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 struct Demo {
     ext_boundary: Vec<[Scalar; 2]>,
-    obstacles: Vec<Obstacle>,
+    obstacles: Obstacles,
     endpoints: [Obstacle; 2],
     norm: Norm,
     #[serde(default)]
     amount_results: usize,
     layer_transition_penality: Scalar,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum Obstacles {
+    List(Vec<Obstacle>),
+    Tesselation(Tesselation<Scalar, LayerIds>),
 }
 
 #[derive(
@@ -161,48 +168,56 @@ async fn main() {
     let demo = std::fs::read(demo_fname).expect("Unable to read demo file");
     let demo: Demo = toml::from_slice(&demo[..]).expect("Unable to parse demo file");
 
-    let all_layers: LayerIds = demo
-        .endpoints
-        .iter()
-        .chain(demo.obstacles.iter())
-        .map(|i| &i.layers)
-        .collect();
-    let rtree = RTree::bulk_load(demo.obstacles);
+    let mut navmesh = match demo.obstacles {
+        Obstacles::List(lst) => {
+            let all_layers: LayerIds = demo
+                .endpoints
+                .iter()
+                .chain(lst.iter())
+                .map(|i| &i.layers)
+                .collect();
+            let rtree = RTree::bulk_load(lst);
 
-    let mut navmesh = Tesselation::<_, _>::default();
+            let mut navmesh = Tesselation::<_, _>::default();
 
-    navmesh.allocate_shapes(vec![vec![
-        demo.ext_boundary.iter().copied().map(Into::into).collect(),
-    ]]);
+            navmesh.allocate_shapes(vec![vec![
+                demo.ext_boundary.iter().copied().map(Into::into).collect(),
+            ]]);
 
-    for obstacle in &rtree {
-        let contour: Vec<_> = obstacle.exterior.iter().copied().map(Into::into).collect();
-        navmesh.allocate_shapes(vec![vec![contour.clone()]]);
-        let _ = navmesh.update_data(&contour, |_, layers| {
-            *layers |= &obstacle.layers;
-            ControlFlow::<()>::Continue(())
-        });
-    }
+            for obstacle in &rtree {
+                let contour: Vec<_> = obstacle.exterior.iter().copied().map(Into::into).collect();
+                navmesh.allocate_shapes(vec![vec![contour.clone()]]);
+                let _ = navmesh.update_data(&contour, |_, layers| {
+                    *layers |= &obstacle.layers;
+                    ControlFlow::<()>::Continue(())
+                });
+            }
 
-    {
-        let root_envelope = navmesh.envelope();
-        // make amount of faces minimal
-        navmesh.optimize_envelope(root_envelope);
-        // invert the layers for astar
-        let _ = navmesh.update_data(
-            &[
-                root_envelope.lower(),
-                [root_envelope.lower()[0], root_envelope.upper()[1]],
-                root_envelope.upper(),
-                [root_envelope.upper()[0], root_envelope.lower()[1]],
-            ]
-            .map(Into::into),
-            |_, layers| {
-                *layers = &*layers ^ &all_layers;
-                ControlFlow::<()>::Continue(())
-            },
-        );
-    }
+            {
+                let root_envelope = navmesh.envelope();
+                // make amount of faces minimal
+                navmesh.optimize_envelope(root_envelope);
+                // invert the layers for astar
+                let _ = navmesh.update_data(
+                    &[
+                        root_envelope.lower(),
+                        [root_envelope.lower()[0], root_envelope.upper()[1]],
+                        root_envelope.upper(),
+                        [root_envelope.upper()[0], root_envelope.lower()[1]],
+                    ]
+                    .map(Into::into),
+                    |_, layers| {
+                        *layers = &*layers ^ &all_layers;
+                        ControlFlow::<()>::Continue(())
+                    },
+                );
+            }
+
+            navmesh
+        }
+        Obstacles::Tesselation(tess) => tess,
+    };
+
     navmesh.rebalance();
 
     println!("navmesh: {:#?}", navmesh);
@@ -220,7 +235,7 @@ async fn main() {
                     .iter()
                     .enumerate()
                     .find(|&(_, vertex)| need_vertex == vertex)
-                    .unwrap()
+                    .unwrap_or_else(|| panic!("unable to find vertex {need_vertex:?}"))
                     .0 as u32
             })
             .collect(),

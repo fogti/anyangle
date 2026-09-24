@@ -25,3 +25,6 @@ num-traits = "0.2"
 polygon_unionfind.workspace = true
 rstar.workspace = true
 serde = { workspace = true, optional = true }
+
+[patch.crates-io]
+rstar = { git = "https://github.com/georust/rstar" }
