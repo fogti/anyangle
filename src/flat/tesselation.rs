@@ -277,6 +277,26 @@ where
         }
     }
 
+    pub fn filter_map_data<U, F>(self, mut f: F) -> Tesselation<Scalar, U, Params>
+    where
+        U: Clone + Eq + Ord,
+        F: FnMut(T) -> Option<U>,
+    {
+        Tesselation {
+            rtree: RTree::bulk_load_with_params(
+                self.rtree
+                    .into_iter()
+                    .filter_map(|Face { contour, data }| {
+                        Some(Face {
+                            contour,
+                            data: f(data)?,
+                        })
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
     /// Moves all objects in this tesselation by `translation`.
     pub fn move_by(&mut self, translation: [Scalar; 2]) {
         self.rtree = RTree::bulk_load_with_params(
