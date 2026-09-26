@@ -69,7 +69,7 @@ impl<Scalar: RTreeNum, T> RTreeObject for Face<Scalar, T> {
         into = "RTree<Face<Scalar, T>, Params>",
         bound(
             serialize = "Scalar: Clone + RTreeNum + serde::Serialize, T: Clone + serde::Serialize, Params: Clone + RTreeParams",
-            deserialize = "Scalar: RTreeNum + IntNumber + OverlayInt + serde::Deserialize<'de>, T: Clone + fmt::Debug + serde::Deserialize<'de>, Params: RTreeParams"
+            deserialize = "Scalar: RTreeNum + IntNumber + OverlayInt + serde::Deserialize<'de>, T: Clone + PartialEq + fmt::Debug + serde::Deserialize<'de>, Params: RTreeParams"
         )
     )
 )]
@@ -351,7 +351,7 @@ where
 impl<Scalar, T, Params> TryFrom<RTree<Face<Scalar, T>, Params>> for Tesselation<Scalar, T, Params>
 where
     Scalar: RTreeNum + IntNumber + OverlayInt,
-    T: Clone,
+    T: Clone + PartialEq,
     Params: RTreeParams,
 {
     type Error = NotATesselation<Scalar, T, Params>;
@@ -363,6 +363,9 @@ where
         'outer: for i in &rtree {
             let i_contour_for_overlay = i.contour.iter().map(|i| (*i).into()).collect::<Vec<_>>();
             for j in rtree.locate_in_envelope_intersecting(AABB::from_points(i.contour.iter())) {
+                if i == j {
+                    continue;
+                }
                 let mut overlay = PredicateOverlay::new(i.contour.len() + j.contour.len());
                 overlay.add_contour(&i_contour_for_overlay, ShapeType::Subject);
                 overlay.add_contour(
